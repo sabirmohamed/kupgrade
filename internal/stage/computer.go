@@ -76,6 +76,13 @@ func (c *Computer) GetTargetVersion() string {
 	return c.targetVersion
 }
 
+// GetPodCount returns the pod count for a node
+func (c *Computer) GetPodCount(nodeName string) int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nodePodCounts[nodeName]
+}
+
 // DetectTargetVersion auto-detects target from node versions
 func (c *Computer) DetectTargetVersion(nodes []*corev1.Node) string {
 	c.mu.Lock()

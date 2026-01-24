@@ -139,7 +139,18 @@ func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
 }
 
 func (w *PodWatcher) onDelete(obj interface{}) {
-	pod := obj.(*corev1.Pod)
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		// Handle DeletedFinalStateUnknown (object deleted while disconnected)
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			return
+		}
+		pod, ok = tombstone.Obj.(*corev1.Pod)
+		if !ok {
+			return
+		}
+	}
 
 	// Filter by namespace if specified
 	if w.namespace != "" && pod.Namespace != w.namespace {

@@ -89,7 +89,10 @@ func (w *EventWatcher) Start(ctx context.Context) error {
 }
 
 func (w *EventWatcher) onAdd(obj interface{}) {
-	event := obj.(*corev1.Event)
+	event, ok := obj.(*corev1.Event)
+	if !ok {
+		return
+	}
 
 	// Filter by namespace if specified
 	if w.namespace != "" && event.Namespace != w.namespace {

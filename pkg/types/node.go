@@ -20,6 +20,12 @@ type NodeState struct {
 	Schedulable   bool
 	PodCount      int
 	TargetVersion string
+
+	// Phase 2 fields
+	InitialPodCount int
+	DrainProgress   int
+	Blocked         bool
+	BlockerReason   string
 }
 
 // AllStages returns all stages in pipeline order

@@ -7,6 +7,11 @@ type EventMsg struct {
 	Event types.Event
 }
 
+// NodeUpdateMsg indicates node state changed
+type NodeUpdateMsg struct {
+	Node types.NodeState
+}
+
 // ErrorMsg indicates an error occurred
 type ErrorMsg struct {
 	Err         error
@@ -15,3 +20,6 @@ type ErrorMsg struct {
 
 // TickMsg triggers periodic updates
 type TickMsg struct{}
+
+// SpinnerMsg triggers spinner animation
+type SpinnerMsg struct{}

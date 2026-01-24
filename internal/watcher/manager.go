@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 )
@@ -43,8 +44,8 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 	}
 
 	// Create watchers
-	m.nodeWatcher = NewNodeWatcher(factory, m, stages)
 	m.podWatcher = NewPodWatcher(factory, namespace, m, stages, migrations)
+	m.nodeWatcher = NewNodeWatcher(factory, m, stages, m.countPodsOnNode)
 	m.eventWatcher = NewEventWatcher(factory, namespace, m)
 
 	return m
@@ -128,6 +129,18 @@ func (m *Manager) HasSynced() bool {
 // GetNodeStates returns current state of all nodes
 func (m *Manager) GetNodeStates() []types.NodeState {
 	return m.nodeWatcher.GetNodeStates()
+}
+
+// countPodsOnNode counts pods assigned to a node from the pod informer store
+func (m *Manager) countPodsOnNode(nodeName string) int {
+	count := 0
+	for _, obj := range m.podWatcher.informer.GetStore().List() {
+		pod := obj.(*corev1.Pod)
+		if pod.Spec.NodeName == nodeName {
+			count++
+		}
+	}
+	return count
 }
 
 // WaitForCacheSync waits for all caches to sync

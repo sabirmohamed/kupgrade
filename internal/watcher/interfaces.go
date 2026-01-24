@@ -39,6 +39,9 @@ type StageComputer interface {
 
 	// GetTargetVersion returns the current target version.
 	GetTargetVersion() string
+
+	// GetPodCount returns the pod count for a node.
+	GetPodCount(nodeName string) int
 }
 
 // MigrationTracker correlates pod deletes with creates to detect migrations.

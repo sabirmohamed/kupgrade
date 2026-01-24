@@ -57,8 +57,11 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		detectedTarget = serverVersion
 	}
 
+	// Get initial node states
+	initialNodes := manager.GetNodeStates()
+
 	// Create and run TUI
-	model := tui.New(ctx, manager.Events(), client.Context, serverVersion, detectedTarget)
+	model := tui.New(ctx, manager.Events(), client.Context, serverVersion, detectedTarget, initialNodes)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

@@ -13,19 +13,21 @@ import (
 
 // NodeWatcher watches node resources for upgrade-relevant changes
 type NodeWatcher struct {
-	informer cache.SharedIndexInformer
-	emitter  EventEmitter
-	stages   StageComputer
+	informer   cache.SharedIndexInformer
+	emitter    EventEmitter
+	stages     StageComputer
+	podCounter func(nodeName string) int
 }
 
 // NewNodeWatcher creates a new node watcher
-func NewNodeWatcher(factory informers.SharedInformerFactory, emitter EventEmitter, stages StageComputer) *NodeWatcher {
+func NewNodeWatcher(factory informers.SharedInformerFactory, emitter EventEmitter, stages StageComputer, podCounter func(string) int) *NodeWatcher {
 	informer := factory.Core().V1().Nodes().Informer()
 
 	return &NodeWatcher{
-		informer: informer,
-		emitter:  emitter,
-		stages:   stages,
+		informer:   informer,
+		emitter:    emitter,
+		stages:     stages,
+		podCounter: podCounter,
 	}
 }
 
@@ -118,7 +120,17 @@ func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 }
 
 func (w *NodeWatcher) onDelete(obj interface{}) {
-	node := obj.(*corev1.Node)
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			return
+		}
+		node, ok = tombstone.Obj.(*corev1.Node)
+		if !ok {
+			return
+		}
+	}
 	w.emitter.Emit(types.Event{
 		Type:      types.EventK8sWarning,
 		Severity:  types.SeverityWarning,
@@ -133,12 +145,17 @@ func (w *NodeWatcher) GetNodeStates() []types.NodeState {
 	var states []types.NodeState
 	for _, obj := range w.informer.GetStore().List() {
 		node := obj.(*corev1.Node)
+		podCount := 0
+		if w.podCounter != nil {
+			podCount = w.podCounter(node.Name)
+		}
 		states = append(states, types.NodeState{
 			Name:        node.Name,
 			Stage:       w.stages.ComputeStage(node),
 			Version:     node.Status.NodeInfo.KubeletVersion,
 			Ready:       isNodeReady(node),
 			Schedulable: !node.Spec.Unschedulable,
+			PodCount:    podCount,
 		})
 	}
 	return states
