@@ -247,12 +247,12 @@ func (m Model) renderBlockersPanel(width int) string {
 }
 
 func (m Model) renderMigrationsPanel(width int) string {
-	title := panelTitleStyle.Render("↹ MIGRATIONS")
+	title := panelTitleStyle.Render("↹ RESCHEDULED")
 	var lines []string
 	lines = append(lines, title)
 
 	if len(m.migrations) == 0 {
-		lines = append(lines, footerDescStyle.Render("No migrations yet"))
+		lines = append(lines, footerDescStyle.Render("No pod moves yet"))
 	} else {
 		for _, mig := range m.migrations {
 			icon := migrateIcon
