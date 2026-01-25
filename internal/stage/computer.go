@@ -59,12 +59,17 @@ func (c *Computer) UpdatePodCount(nodeName string, delta int) {
 	}
 }
 
-// SetTargetVersion sets the upgrade target
+// SetTargetVersion updates target if version is higher than current
 func (c *Computer) SetTargetVersion(version string) {
+	if version == "" {
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if version != "" {
+	// Keep highest version as target
+	if c.targetVersion == "" || semver.Compare(version, c.targetVersion) > 0 {
 		c.targetVersion = version
 	}
 }

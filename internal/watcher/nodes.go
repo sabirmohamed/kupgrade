@@ -45,7 +45,8 @@ func (w *NodeWatcher) Start(ctx context.Context) error {
 func (w *NodeWatcher) onAdd(obj interface{}) {
 	node := obj.(*corev1.Node)
 
-	w.stages.SetTargetVersion("")
+	// Update target if this node has higher version
+	w.stages.SetTargetVersion(node.Status.NodeInfo.KubeletVersion)
 
 	// Emit event for events panel
 	w.emitter.Emit(types.Event{
@@ -63,6 +64,9 @@ func (w *NodeWatcher) onAdd(obj interface{}) {
 func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 	oldNode := oldObj.(*corev1.Node)
 	newNode := newObj.(*corev1.Node)
+
+	// Update target if this node has higher version
+	w.stages.SetTargetVersion(newNode.Status.NodeInfo.KubeletVersion)
 
 	// Emit events for significant changes (for events panel)
 	w.emitChangeEvents(oldNode, newNode)
