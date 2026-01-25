@@ -13,13 +13,13 @@ const (
 
 // NodeState holds the current state of a node relevant to upgrades
 type NodeState struct {
-	Name          string
-	Stage         NodeStage
-	Version       string
-	Ready         bool
-	Schedulable   bool
-	PodCount      int
-	TargetVersion string
+	Name        string
+	Stage       NodeStage
+	Version     string
+	Ready       bool
+	Schedulable bool
+	PodCount    int
+	Deleted     bool // true when node was deleted
 
 	// Phase 2 fields
 	InitialPodCount int

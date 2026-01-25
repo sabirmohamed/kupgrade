@@ -11,15 +11,22 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-const eventBufferSize = 100
+const (
+	eventBufferSize     = 100
+	nodeStateBufferSize = 50
+)
+
+// Compile-time interface check
+var _ EventEmitter = (*Manager)(nil)
 
 // Manager coordinates all watchers and emits events
 type Manager struct {
 	factory   informers.SharedInformerFactory
 	namespace string
 
-	eventCh chan types.Event
-	wg      sync.WaitGroup
+	eventCh     chan types.Event
+	nodeStateCh chan types.NodeState
+	wg          sync.WaitGroup
 
 	nodeWatcher  *NodeWatcher
 	podWatcher   *PodWatcher
@@ -31,16 +38,18 @@ type Manager struct {
 // NewManager creates a new watcher manager
 func NewManager(factory informers.SharedInformerFactory, namespace string, targetVersion string) *Manager {
 	eventCh := make(chan types.Event, eventBufferSize)
+	nodeStateCh := make(chan types.NodeState, nodeStateBufferSize)
 
 	stages := NewStageComputer(targetVersion)
 	migrations := NewMigrationTracker()
 
 	m := &Manager{
-		factory:    factory,
-		namespace:  namespace,
-		eventCh:    eventCh,
-		stages:     stages,
-		migrations: migrations,
+		factory:     factory,
+		namespace:   namespace,
+		eventCh:     eventCh,
+		nodeStateCh: nodeStateCh,
+		stages:      stages,
+		migrations:  migrations,
 	}
 
 	// Create watchers
@@ -53,26 +62,23 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 
 // Start begins all watchers
 func (m *Manager) Start(ctx context.Context) error {
-	// Start the informer factory
 	m.factory.Start(ctx.Done())
 
-	// Wait for cache sync
 	synced := m.factory.WaitForCacheSync(ctx.Done())
 	for typ, ok := range synced {
 		if !ok {
-			return fmt.Errorf("cache sync failed for %v", typ)
+			return fmt.Errorf("watcher: cache sync failed for %v", typ)
 		}
 	}
 
-	// Start watchers (they register handlers, already running via factory)
 	if err := m.nodeWatcher.Start(ctx); err != nil {
-		return fmt.Errorf("node watcher start failed: %w", err)
+		return fmt.Errorf("watcher: %w", err)
 	}
 	if err := m.podWatcher.Start(ctx); err != nil {
-		return fmt.Errorf("pod watcher start failed: %w", err)
+		return fmt.Errorf("watcher: %w", err)
 	}
 	if err := m.eventWatcher.Start(ctx); err != nil {
-		return fmt.Errorf("event watcher start failed: %w", err)
+		return fmt.Errorf("watcher: %w", err)
 	}
 
 	// Start migration cleanup goroutine
@@ -90,22 +96,34 @@ func (m *Manager) Events() <-chan types.Event {
 	return m.eventCh
 }
 
-// Emit implements EventEmitter with ring buffer semantics (ADR-005)
+// NodeStateUpdates returns channel for node state changes
+func (m *Manager) NodeStateUpdates() <-chan types.NodeState {
+	return m.nodeStateCh
+}
+
+// Emit sends an event (ring buffer semantics - drops oldest if full)
 func (m *Manager) Emit(event types.Event) {
 	select {
 	case m.eventCh <- event:
-		// Sent successfully
 	default:
-		// Channel full - drop oldest, send new
 		select {
-		case <-m.eventCh: // Remove oldest
+		case <-m.eventCh:
 		default:
 		}
+		m.eventCh <- event
+	}
+}
+
+// EmitNodeState sends a node state update (ring buffer semantics)
+func (m *Manager) EmitNodeState(state types.NodeState) {
+	select {
+	case m.nodeStateCh <- state:
+	default:
 		select {
-		case m.eventCh <- event:
+		case <-m.nodeStateCh:
 		default:
-			// Still full after drop - very rare, skip
 		}
+		m.nodeStateCh <- state
 	}
 }
 
@@ -126,9 +144,9 @@ func (m *Manager) HasSynced() bool {
 		m.eventWatcher.informer.HasSynced()
 }
 
-// GetNodeStates returns current state of all nodes
-func (m *Manager) GetNodeStates() []types.NodeState {
-	return m.nodeWatcher.GetNodeStates()
+// InitialNodeStates returns current state of all nodes (for initial TUI load)
+func (m *Manager) InitialNodeStates() []types.NodeState {
+	return m.nodeWatcher.buildNodeStates()
 }
 
 // countPodsOnNode counts pods assigned to a node from the pod informer store

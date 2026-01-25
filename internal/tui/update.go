@@ -19,14 +19,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case NodeUpdateMsg:
+		m.handleNodeUpdate(msg.Node)
+		return m, waitForNodeState(m.config.NodeStateCh)
+
 	case EventMsg:
 		m.handleEvent(msg.Event)
-		return m, waitForEvent(m.eventCh)
-
-	case NodeUpdateMsg:
-		m.nodes[msg.Node.Name] = msg.Node
-		m.updateNodesByStage()
-		return m, nil
+		return m, waitForEvent(m.config.EventCh)
 
 	case ErrorMsg:
 		if !msg.Recoverable {
@@ -48,7 +47,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Global keys
 	if matchKey(msg, keys.Quit) {
 		if m.viewMode != ViewOverview {
 			m.viewMode = ViewOverview
@@ -71,7 +69,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// View-specific keys
 	switch m.viewMode {
 	case ViewOverview:
 		return m.handleOverviewKey(msg)
@@ -155,62 +152,33 @@ func (m *Model) handleHelpKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
+// handleNodeUpdate stores node state from watcher (no computation here)
+func (m *Model) handleNodeUpdate(node types.NodeState) {
+	if node.Deleted {
+		delete(m.nodes, node.Name)
+	} else {
+		m.nodes[node.Name] = node
+	}
+	m.rebuildNodesByStage()
+}
+
+// handleEvent adds event to display list (no state changes)
 func (m *Model) handleEvent(e types.Event) {
 	m.eventCount++
 
-	// Add to events list
 	m.events = append(m.events, e)
 	if len(m.events) > maxEvents {
 		m.events = m.events[len(m.events)-maxEvents:]
 	}
 
-	// Update node state from event
-	if e.NodeName != "" {
-		node, exists := m.nodes[e.NodeName]
-		if !exists {
-			node = types.NodeState{
-				Name:        e.NodeName,
-				Schedulable: true,
-				Stage:       types.StageReady,
-			}
-		}
-
-		switch e.Type {
-		case types.EventNodeCordon:
-			node.Schedulable = false
-			node.Stage = types.StageCordoned
-		case types.EventNodeUncordon:
-			node.Schedulable = true
-			node.Stage = types.StageReady
-		case types.EventNodeReady:
-			node.Ready = true
-			if node.Schedulable {
-				if node.Version == m.targetVersion && m.targetVersion != "" {
-					node.Stage = types.StageComplete
-				} else {
-					node.Stage = types.StageReady
-				}
-			}
-		case types.EventNodeNotReady:
-			node.Ready = false
-			node.Stage = types.StageUpgrading
-		case types.EventNodeVersion:
-			node.Version = m.targetVersion
-		}
-
-		m.nodes[e.NodeName] = node
-		m.updateNodesByStage()
-	}
-
 	// Handle migration events
 	if e.Type == types.EventMigration {
-		migration := types.Migration{
+		m.migrations = append(m.migrations, types.Migration{
 			NewPod:    e.PodName,
 			Namespace: e.Namespace,
 			ToNode:    e.NodeName,
 			Timestamp: e.Timestamp,
-		}
-		m.migrations = append(m.migrations, migration)
+		})
 		if len(m.migrations) > maxMigrations {
 			m.migrations = m.migrations[len(m.migrations)-maxMigrations:]
 		}

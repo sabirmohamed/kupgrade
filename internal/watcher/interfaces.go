@@ -16,32 +16,31 @@ type Watcher interface {
 	Start(ctx context.Context) error
 }
 
-// EventEmitter sends events to a channel.
+// EventEmitter sends events and node state updates.
 type EventEmitter interface {
 	// Emit sends an event. MUST NOT block.
-	// If channel is full, oldest event MAY be dropped.
 	Emit(event types.Event)
+
+	// EmitNodeState sends a node state update. MUST NOT block.
+	EmitNodeState(state types.NodeState)
 }
 
 // StageComputer determines node upgrade stage from observable state.
 type StageComputer interface {
 	// ComputeStage returns current stage for a node.
-	// MUST be safe for concurrent calls.
 	ComputeStage(node *corev1.Node) types.NodeStage
 
 	// UpdatePodCount updates the pod count for a node.
-	// Called by PodWatcher on add/delete.
 	UpdatePodCount(nodeName string, delta int)
 
 	// SetTargetVersion sets the upgrade target.
-	// If not called, implementation SHOULD auto-detect.
 	SetTargetVersion(version string)
 
-	// GetTargetVersion returns the current target version.
-	GetTargetVersion() string
+	// TargetVersion returns the current target version.
+	TargetVersion() string
 
-	// GetPodCount returns the pod count for a node.
-	GetPodCount(nodeName string) int
+	// PodCount returns the pod count for a node.
+	PodCount(nodeName string) int
 }
 
 // MigrationTracker correlates pod deletes with creates to detect migrations.

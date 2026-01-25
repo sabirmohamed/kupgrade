@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	migrationTTL      = 5 * time.Minute
-	cleanupInterval   = 30 * time.Second
+	migrationTTL    = 5 * time.Minute
+	cleanupInterval = 30 * time.Second
 )
 
 // migrationTracker implements MigrationTracker using owner reference correlation

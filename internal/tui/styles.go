@@ -64,14 +64,11 @@ func stageStyleSelected(stage string) lipgloss.Style {
 	return stageStyle(stage).Underline(true)
 }
 
-// Node card styles
+// Node card styles (width set dynamically in view.go)
 var (
-	nodeCardWidth = 20
-
 	nodeCardBase = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			Padding(0, 1).
-			Width(nodeCardWidth)
+			Padding(0, 1)
 
 	nodeCardNormal = nodeCardBase.Copy().
 			BorderForeground(colorBorder)

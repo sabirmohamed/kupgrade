@@ -39,7 +39,7 @@ var upgradeRelevantReasons = map[string]bool{
 	"FailedBinding":    true,
 
 	// PDB (blockers)
-	"DisruptionBlocked":              true,
+	"DisruptionBlocked":               true,
 	"CalculateExpectedPodCountFailed": true,
 
 	// Volume (blockers)
@@ -49,13 +49,13 @@ var upgradeRelevantReasons = map[string]bool{
 	"VolumeFailedDelete": true,
 
 	// Health
-	"Unhealthy":          true,
-	"ProbeWarning":       true,
-	"BackOff":            true,
-	"SystemOOM":          true,
+	"Unhealthy":           true,
+	"ProbeWarning":        true,
+	"BackOff":             true,
+	"SystemOOM":           true,
 	"FreeDiskSpaceFailed": true,
-	"ContainerGCFailed":  true,
-	"ImageGCFailed":      true,
+	"ContainerGCFailed":   true,
+	"ImageGCFailed":       true,
 }
 
 // EventWatcher watches Kubernetes events for upgrade-relevant occurrences

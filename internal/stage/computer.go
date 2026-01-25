@@ -4,8 +4,8 @@ import (
 	"sync"
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
-	corev1 "k8s.io/api/core/v1"
 	"golang.org/x/mod/semver"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // Computer implements StageComputer for node stage detection
@@ -69,15 +69,15 @@ func (c *Computer) SetTargetVersion(version string) {
 	}
 }
 
-// GetTargetVersion returns the current target version
-func (c *Computer) GetTargetVersion() string {
+// TargetVersion returns the current target version
+func (c *Computer) TargetVersion() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.targetVersion
 }
 
-// GetPodCount returns the pod count for a node
-func (c *Computer) GetPodCount(nodeName string) int {
+// PodCount returns the pod count for a node
+func (c *Computer) PodCount(nodeName string) int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.nodePodCounts[nodeName]

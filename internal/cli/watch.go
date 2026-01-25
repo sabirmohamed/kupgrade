@@ -28,47 +28,43 @@ func NewWatchCmd() *cobra.Command {
 }
 
 func runWatch(cmd *cobra.Command, args []string) error {
-	// Setup signal handling
 	ctx := signals.SetupSignalHandler()
 
-	// Create Kubernetes client
 	client, err := kube.NewClient(ConfigFlags)
 	if err != nil {
-		return fmt.Errorf("failed to create kubernetes client: %w", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
-	// Get server version
-	serverVersion, err := client.GetServerVersion(ctx)
+	serverVersion, err := client.ServerVersion(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get server version: %w", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
-	// Create watcher manager
 	manager := watcher.NewManager(client.Factory, client.Namespace, targetVersion)
 
-	// Start watchers
 	if err := manager.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start watchers: %w", err)
+		return fmt.Errorf("cli: %w", err)
 	}
 
-	// Get detected target version
-	detectedTarget := manager.StageComputer().GetTargetVersion()
+	detectedTarget := manager.StageComputer().TargetVersion()
 	if detectedTarget == "" {
 		detectedTarget = serverVersion
 	}
 
-	// Get initial node states
-	initialNodes := manager.GetNodeStates()
-
-	// Create and run TUI
-	model := tui.New(ctx, manager.Events(), client.Context, serverVersion, detectedTarget, initialNodes)
+	model := tui.New(tui.Config{
+		Context:       client.Context,
+		ServerVersion: serverVersion,
+		TargetVersion: detectedTarget,
+		InitialNodes:  manager.InitialNodeStates(),
+		EventCh:       manager.Events(),
+		NodeStateCh:   manager.NodeStateUpdates(),
+	})
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("TUI error: %w", err)
+		return fmt.Errorf("cli: TUI error: %w", err)
 	}
 
-	// Wait for cleanup
 	manager.Wait()
 
 	return nil

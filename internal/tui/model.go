@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,12 +28,19 @@ const (
 	DrainModeSchedule
 )
 
+// Config holds TUI configuration
+type Config struct {
+	Context       string
+	ServerVersion string
+	TargetVersion string
+	InitialNodes  []types.NodeState
+	EventCh       <-chan types.Event
+	NodeStateCh   <-chan types.NodeState
+}
+
+// Model is the TUI state
 type Model struct {
-	ctx           context.Context
-	eventCh       <-chan types.Event
-	contextName   string
-	serverVersion string
-	targetVersion string
+	config Config
 
 	// Dimensions
 	width  int
@@ -46,7 +52,7 @@ type Model struct {
 	selectedStage int
 	selectedNode  int
 
-	// Data
+	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
 	nodesByStage map[types.NodeStage][]string
 	events       []types.Event
@@ -62,49 +68,55 @@ type Model struct {
 	fatalError error
 }
 
-func New(ctx context.Context, eventCh <-chan types.Event, contextName, serverVersion, targetVersion string, initialNodes []types.NodeState) Model {
+// New creates a new TUI model
+func New(cfg Config) Model {
 	m := Model{
-		ctx:           ctx,
-		eventCh:       eventCh,
-		contextName:   contextName,
-		serverVersion: serverVersion,
-		targetVersion: targetVersion,
-		viewMode:      ViewOverview,
-		drainMode:     DrainModeDrain,
-		selectedStage: 0,
-		selectedNode:  0,
-		nodes:         make(map[string]types.NodeState),
-		nodesByStage:  make(map[types.NodeStage][]string),
-		events:        make([]types.Event, 0, maxEvents),
-		migrations:    make([]types.Migration, 0, maxMigrations),
-		blockers:      make([]types.Blocker, 0),
-		currentTime:   time.Now(),
+		config:       cfg,
+		viewMode:     ViewOverview,
+		drainMode:    DrainModeDrain,
+		nodes:        make(map[string]types.NodeState),
+		nodesByStage: make(map[types.NodeStage][]string),
+		events:       make([]types.Event, 0, maxEvents),
+		migrations:   make([]types.Migration, 0, maxMigrations),
+		blockers:     make([]types.Blocker, 0),
+		currentTime:  time.Now(),
 	}
 
-	// Populate initial node states
-	for _, node := range initialNodes {
+	// Load initial nodes
+	for _, node := range cfg.InitialNodes {
 		m.nodes[node.Name] = node
 	}
-	m.updateNodesByStage()
+	m.rebuildNodesByStage()
 
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		waitForEvent(m.eventCh),
+		waitForEvent(m.config.EventCh),
+		waitForNodeState(m.config.NodeStateCh),
 		tick(),
 		spinnerTick(),
 	)
 }
 
-func waitForEvent(eventCh <-chan types.Event) tea.Cmd {
+func waitForEvent(ch <-chan types.Event) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-eventCh
+		event, ok := <-ch
 		if !ok {
 			return nil
 		}
 		return EventMsg{Event: event}
+	}
+}
+
+func waitForNodeState(ch <-chan types.NodeState) tea.Cmd {
+	return func() tea.Msg {
+		state, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return NodeUpdateMsg{Node: state}
 	}
 }
 
@@ -120,7 +132,11 @@ func spinnerTick() tea.Cmd {
 	})
 }
 
-// Helper methods
+// Helper accessors
+
+func (m Model) contextName() string   { return m.config.Context }
+func (m Model) serverVersion() string { return m.config.ServerVersion }
+func (m Model) targetVersion() string { return m.config.TargetVersion }
 
 func (m *Model) stageAtIndex(idx int) types.NodeStage {
 	stages := types.AllStages()
@@ -152,7 +168,7 @@ func (m *Model) selectedNodeState() (types.NodeState, bool) {
 	return state, ok
 }
 
-func (m *Model) updateNodesByStage() {
+func (m *Model) rebuildNodesByStage() {
 	m.nodesByStage = make(map[types.NodeStage][]string)
 	for name, node := range m.nodes {
 		m.nodesByStage[node.Stage] = append(m.nodesByStage[node.Stage], name)

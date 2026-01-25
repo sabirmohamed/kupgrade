@@ -34,18 +34,26 @@ func (m Model) renderOverview() string {
 	b.WriteString("\n\n")
 	b.WriteString(m.renderMainContent())
 	b.WriteString("\n\n")
+	b.WriteString(m.renderBottomPanels())
+	b.WriteString("\n\n")
 	b.WriteString(m.renderFooter())
 
-	return b.String()
+	content := b.String()
+
+	// Fill terminal dimensions
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
+	}
+	return content
 }
 
 func (m Model) renderHeader() string {
 	title := headerStyle.Render("⎈ kupgrade watch")
-	context := contextStyle.Render(m.contextName)
+	context := contextStyle.Render(m.contextName())
 
-	version := m.serverVersion
-	if m.targetVersion != "" && m.targetVersion != m.serverVersion {
-		version = fmt.Sprintf("%s→%s", m.serverVersion, m.targetVersion)
+	version := m.serverVersion()
+	if m.targetVersion() != "" && m.targetVersion() != m.serverVersion() {
+		version = fmt.Sprintf("%s→%s", m.serverVersion(), m.targetVersion())
 	}
 	versionDisplay := versionStyle.Render(version)
 
@@ -118,27 +126,25 @@ func (m Model) renderStageFlow() string {
 }
 
 func (m Model) renderMainContent() string {
-	leftPanel := m.renderNodeCards()
-	rightPanel := m.renderRightPanel()
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, "  ", rightPanel)
+	return m.renderNodeCards()
 }
 
 func (m Model) renderNodeCards() string {
 	stages := types.AllStages()
 	columns := make([]string, len(stages))
+	cardWidth := m.nodeCardWidth()
 
 	for i, stage := range stages {
 		nodes := m.nodesByStage[stage]
 		var cards []string
 
 		if len(nodes) == 0 {
-			cards = append(cards, m.renderEmptyStage())
+			cards = append(cards, m.renderEmptyStage(cardWidth))
 		} else {
 			for j, nodeName := range nodes {
 				node := m.nodes[nodeName]
 				isSelected := i == m.selectedStage && j == m.selectedNode
-				cards = append(cards, m.renderNodeCard(node, isSelected))
+				cards = append(cards, m.renderNodeCard(node, isSelected, cardWidth))
 			}
 		}
 
@@ -156,17 +162,22 @@ func (m Model) renderNodeCards() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
-func (m Model) renderEmptyStage() string {
+func (m Model) renderEmptyStage(cardWidth int) string {
 	content := nodePodStyle.Render("(empty)")
-	return nodeCardNormal.Render(content)
+	return nodeCardNormal.Width(cardWidth).Render(content)
 }
 
-func (m Model) renderNodeCard(node types.NodeState, selected bool) string {
+func (m Model) renderNodeCard(node types.NodeState, selected bool, cardWidth int) string {
 	var b strings.Builder
 
+	// Truncate name to fit card width (accounting for padding/border)
+	maxNameLen := cardWidth - 4
+	if maxNameLen < 8 {
+		maxNameLen = 8
+	}
 	name := node.Name
-	if len(name) > 16 {
-		name = name[len(name)-16:]
+	if len(name) > maxNameLen {
+		name = name[len(name)-maxNameLen:]
 	}
 	b.WriteString(nodeNameStyle.Render(name))
 	b.WriteString("\n")
@@ -200,13 +211,13 @@ func (m Model) renderNodeCard(node types.NodeState, selected bool) string {
 	var style lipgloss.Style
 	switch {
 	case selected:
-		style = nodeCardSelected
+		style = nodeCardSelected.Width(cardWidth)
 	case node.Blocked:
-		style = nodeCardBlocked
+		style = nodeCardBlocked.Width(cardWidth)
 	case node.Stage == types.StageComplete:
-		style = nodeCardComplete
+		style = nodeCardComplete.Width(cardWidth)
 	default:
-		style = nodeCardNormal
+		style = nodeCardNormal.Width(cardWidth)
 	}
 
 	return style.Render(content)
@@ -220,20 +231,23 @@ func (m Model) renderSmallProgressBar(percent int) string {
 	return fmt.Sprintf("%s %d%%", bar, percent)
 }
 
-func (m Model) renderRightPanel() string {
+func (m Model) renderBottomPanels() string {
 	var panels []string
 
+	// Calculate panel widths based on terminal width
+	blockersWidth, migrationsWidth, eventsWidth := m.panelWidths()
+
 	if len(m.blockers) > 0 {
-		panels = append(panels, m.renderBlockersPanel())
+		panels = append(panels, m.renderBlockersPanel(blockersWidth))
 	}
 
-	panels = append(panels, m.renderMigrationsPanel())
-	panels = append(panels, m.renderEventsPanel())
+	panels = append(panels, m.renderMigrationsPanel(migrationsWidth))
+	panels = append(panels, m.renderEventsPanel(eventsWidth))
 
-	return lipgloss.JoinVertical(lipgloss.Left, panels...)
+	return lipgloss.JoinHorizontal(lipgloss.Top, panels...)
 }
 
-func (m Model) renderBlockersPanel() string {
+func (m Model) renderBlockersPanel(width int) string {
 	title := panelTitleError.Render(fmt.Sprintf("⚠ BLOCKERS (%d)", len(m.blockers)))
 	var lines []string
 	lines = append(lines, title)
@@ -247,10 +261,10 @@ func (m Model) renderBlockersPanel() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	return panelStyle.Width(40).Render(content)
+	return panelStyle.Width(width).MarginRight(2).Render(content)
 }
 
-func (m Model) renderMigrationsPanel() string {
+func (m Model) renderMigrationsPanel(width int) string {
 	title := panelTitleStyle.Render("↹ MIGRATIONS")
 	var lines []string
 	lines = append(lines, title)
@@ -269,13 +283,20 @@ func (m Model) renderMigrationsPanel() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	return panelStyle.Width(40).Render(content)
+	return panelStyle.Width(width).MarginRight(2).Render(content)
 }
 
-func (m Model) renderEventsPanel() string {
+func (m Model) renderEventsPanel(width int) string {
 	title := panelTitleStyle.Render("• EVENTS")
 	var lines []string
 	lines = append(lines, title)
+
+	// Calculate max message length based on panel width
+	// Account for timestamp (8), icon (2), spacing (4), border/padding (4)
+	maxMsgLen := width - 18
+	if maxMsgLen < 20 {
+		maxMsgLen = 20
+	}
 
 	if len(m.events) == 0 {
 		lines = append(lines, footerDescStyle.Render("Waiting for events..."))
@@ -284,15 +305,15 @@ func (m Model) renderEventsPanel() string {
 			ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
 			icon := m.severityIcon(e.Severity)
 			msg := e.Message
-			if len(msg) > 35 {
-				msg = msg[:35] + "..."
+			if len(msg) > maxMsgLen {
+				msg = msg[:maxMsgLen] + "..."
 			}
 			lines = append(lines, fmt.Sprintf("%s %s %s", ts, icon, msg))
 		}
 	}
 
 	content := strings.Join(lines, "\n")
-	return panelStyle.Width(40).Render(content)
+	return panelStyle.Width(width).Render(content)
 }
 
 func (m Model) severityIcon(s types.Severity) string {
@@ -381,4 +402,54 @@ func (m Model) renderNodeDetailOverlay() string {
 
 	content := strings.Join(lines, "\n")
 	return overlayStyle.Render(content)
+}
+
+// Layout calculation helpers
+
+// nodeCardWidth calculates card width based on terminal width
+func (m Model) nodeCardWidth() int {
+	if m.width <= 0 {
+		return 20 // default
+	}
+	// 5 stages, 2 chars gap between each (4 gaps total = 8 chars)
+	available := m.width - 8
+	cardWidth := available / 5
+	if cardWidth < 16 {
+		cardWidth = 16
+	}
+	if cardWidth > 30 {
+		cardWidth = 30
+	}
+	return cardWidth
+}
+
+// panelWidths calculates widths for bottom panels
+func (m Model) panelWidths() (blockers, migrations, events int) {
+	if m.width <= 0 {
+		return 30, 30, 50 // defaults
+	}
+
+	available := m.width - 8 // margins between panels
+
+	if len(m.blockers) > 0 {
+		// Three panels: blockers 25%, migrations 30%, events 45%
+		blockers = available * 25 / 100
+		migrations = available * 30 / 100
+		events = available - blockers - migrations
+	} else {
+		// Two panels: migrations 35%, events 65%
+		blockers = 0
+		migrations = available * 35 / 100
+		events = available - migrations
+	}
+
+	// Ensure minimums
+	if migrations < 25 {
+		migrations = 25
+	}
+	if events < 40 {
+		events = 40
+	}
+
+	return blockers, migrations, events
 }

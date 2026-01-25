@@ -21,17 +21,15 @@ type NodeWatcher struct {
 
 // NewNodeWatcher creates a new node watcher
 func NewNodeWatcher(factory informers.SharedInformerFactory, emitter EventEmitter, stages StageComputer, podCounter func(string) int) *NodeWatcher {
-	informer := factory.Core().V1().Nodes().Informer()
-
 	return &NodeWatcher{
-		informer:   informer,
+		informer:   factory.Core().V1().Nodes().Informer(),
 		emitter:    emitter,
 		stages:     stages,
 		podCounter: podCounter,
 	}
 }
 
-// Start registers event handlers and waits for cache sync
+// Start registers event handlers
 func (w *NodeWatcher) Start(ctx context.Context) error {
 	_, err := w.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    w.onAdd,
@@ -39,33 +37,42 @@ func (w *NodeWatcher) Start(ctx context.Context) error {
 		DeleteFunc: w.onDelete,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to add node event handler: %w", err)
+		return fmt.Errorf("node handler: %w", err)
 	}
-
 	return nil
 }
 
 func (w *NodeWatcher) onAdd(obj interface{}) {
 	node := obj.(*corev1.Node)
 
-	// Update target version detection on first nodes
-	w.stages.SetTargetVersion("") // Trigger auto-detection if not set
+	w.stages.SetTargetVersion("")
 
-	// Emit initial state as info
+	// Emit event for events panel
 	w.emitter.Emit(types.Event{
 		Type:      types.EventNodeReady,
 		Severity:  types.SeverityInfo,
 		Timestamp: time.Now(),
-		Message:   fmt.Sprintf("Node %s discovered (version %s)", node.Name, node.Status.NodeInfo.KubeletVersion),
+		Message:   fmt.Sprintf("Node %s discovered (%s)", node.Name, node.Status.NodeInfo.KubeletVersion),
 		NodeName:  node.Name,
 	})
+
+	// Emit computed state for TUI
+	w.emitter.EmitNodeState(w.buildState(node))
 }
 
 func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 	oldNode := oldObj.(*corev1.Node)
 	newNode := newObj.(*corev1.Node)
 
-	// Check cordon/uncordon
+	// Emit events for significant changes (for events panel)
+	w.emitChangeEvents(oldNode, newNode)
+
+	// Always emit current state (TUI will update)
+	w.emitter.EmitNodeState(w.buildState(newNode))
+}
+
+func (w *NodeWatcher) emitChangeEvents(oldNode, newNode *corev1.Node) {
+	// Cordon/uncordon
 	if !oldNode.Spec.Unschedulable && newNode.Spec.Unschedulable {
 		w.emitter.Emit(types.Event{
 			Type:      types.EventNodeCordon,
@@ -84,7 +91,7 @@ func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 		})
 	}
 
-	// Check Ready condition changes
+	// Ready condition
 	oldReady := isNodeReady(oldNode)
 	newReady := isNodeReady(newNode)
 	if oldReady && !newReady {
@@ -105,15 +112,15 @@ func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 		})
 	}
 
-	// Check version changes
-	oldVersion := oldNode.Status.NodeInfo.KubeletVersion
-	newVersion := newNode.Status.NodeInfo.KubeletVersion
-	if oldVersion != newVersion && oldVersion != "" && newVersion != "" {
+	// Version change
+	oldVer := oldNode.Status.NodeInfo.KubeletVersion
+	newVer := newNode.Status.NodeInfo.KubeletVersion
+	if oldVer != newVer && oldVer != "" && newVer != "" {
 		w.emitter.Emit(types.Event{
 			Type:      types.EventNodeVersion,
 			Severity:  types.SeverityInfo,
 			Timestamp: time.Now(),
-			Message:   fmt.Sprintf("Node %s upgraded: %s → %s", newNode.Name, oldVersion, newVersion),
+			Message:   fmt.Sprintf("Node %s upgraded: %s → %s", newNode.Name, oldVer, newVer),
 			NodeName:  newNode.Name,
 		})
 	}
@@ -131,6 +138,7 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 			return
 		}
 	}
+
 	w.emitter.Emit(types.Event{
 		Type:      types.EventK8sWarning,
 		Severity:  types.SeverityWarning,
@@ -138,30 +146,41 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 		Message:   fmt.Sprintf("Node %s deleted", node.Name),
 		NodeName:  node.Name,
 	})
+
+	// Emit empty state to signal deletion
+	w.emitter.EmitNodeState(types.NodeState{
+		Name:    node.Name,
+		Deleted: true,
+	})
 }
 
-// GetNodeStates returns current state of all watched nodes
-func (w *NodeWatcher) GetNodeStates() []types.NodeState {
+// buildState creates NodeState from a k8s Node (single source of truth)
+func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
+	podCount := 0
+	if w.podCounter != nil {
+		podCount = w.podCounter(node.Name)
+	}
+
+	return types.NodeState{
+		Name:        node.Name,
+		Stage:       w.stages.ComputeStage(node),
+		Version:     node.Status.NodeInfo.KubeletVersion,
+		Ready:       isNodeReady(node),
+		Schedulable: !node.Spec.Unschedulable,
+		PodCount:    podCount,
+	}
+}
+
+// buildNodeStates returns current state of all nodes (for initial load)
+func (w *NodeWatcher) buildNodeStates() []types.NodeState {
 	var states []types.NodeState
 	for _, obj := range w.informer.GetStore().List() {
 		node := obj.(*corev1.Node)
-		podCount := 0
-		if w.podCounter != nil {
-			podCount = w.podCounter(node.Name)
-		}
-		states = append(states, types.NodeState{
-			Name:        node.Name,
-			Stage:       w.stages.ComputeStage(node),
-			Version:     node.Status.NodeInfo.KubeletVersion,
-			Ready:       isNodeReady(node),
-			Schedulable: !node.Spec.Unschedulable,
-			PodCount:    podCount,
-		})
+		states = append(states, w.buildState(node))
 	}
 	return states
 }
 
-// isNodeReady checks if node has Ready condition True
 func isNodeReady(node *corev1.Node) bool {
 	for _, cond := range node.Status.Conditions {
 		if cond.Type == corev1.NodeReady {

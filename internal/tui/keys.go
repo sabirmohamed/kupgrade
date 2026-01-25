@@ -3,17 +3,17 @@ package tui
 import "github.com/charmbracelet/bubbletea"
 
 type keyMap struct {
-	Quit       []string
-	Left       []string
-	Right      []string
-	Up         []string
-	Down       []string
-	Enter      []string
-	Escape     []string
-	Help       []string
-	Mode1      []string
-	Mode2      []string
-	Mode3      []string
+	Quit   []string
+	Left   []string
+	Right  []string
+	Up     []string
+	Down   []string
+	Enter  []string
+	Escape []string
+	Help   []string
+	Mode1  []string
+	Mode2  []string
+	Mode3  []string
 }
 
 var keys = keyMap{
