@@ -55,9 +55,10 @@ func (w *PodWatcher) onAdd(obj interface{}) {
 		return
 	}
 
-	// Update pod count for node
+	// Update pod count for node and refresh node state
 	if pod.Spec.NodeName != "" {
 		w.stages.UpdatePodCount(pod.Spec.NodeName, 1)
+		w.emitter.RefreshNodeState(pod.Spec.NodeName)
 	}
 
 	// Check for migration completion
@@ -157,9 +158,10 @@ func (w *PodWatcher) onDelete(obj interface{}) {
 		return
 	}
 
-	// Update pod count for node
+	// Update pod count for node and refresh node state
 	if pod.Spec.NodeName != "" {
 		w.stages.UpdatePodCount(pod.Spec.NodeName, -1)
+		w.emitter.RefreshNodeState(pod.Spec.NodeName)
 	}
 
 	// Track for potential migration

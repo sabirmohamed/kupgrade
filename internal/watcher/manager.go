@@ -127,6 +127,18 @@ func (m *Manager) EmitNodeState(state types.NodeState) {
 	}
 }
 
+// RefreshNodeState re-emits the current state of a node (called when pods change)
+func (m *Manager) RefreshNodeState(nodeName string) {
+	// Find the node in the informer store
+	for _, obj := range m.nodeWatcher.informer.GetStore().List() {
+		node := obj.(*corev1.Node)
+		if node.Name == nodeName {
+			m.EmitNodeState(m.nodeWatcher.buildState(node))
+			return
+		}
+	}
+}
+
 // Wait blocks until all goroutines finish
 func (m *Manager) Wait() {
 	m.wg.Wait()

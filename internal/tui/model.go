@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	maxEvents     = 8
-	maxMigrations = 5
+	maxEvents     = 100
+	maxMigrations = 50
 )
 
 // Screen represents the main navigation screens (0-6)

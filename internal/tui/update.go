@@ -166,9 +166,9 @@ func (m *Model) handleNodesKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleDrainsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Count draining nodes
-	drainingCount := len(m.nodesByStage[types.StageDraining])
-	return m.handleListNavigation(msg, drainingCount)
+	// Count cordoned + draining nodes (both are in the drain pipeline)
+	drainCount := len(m.nodesByStage[types.StageCordoned]) + len(m.nodesByStage[types.StageDraining])
+	return m.handleListNavigation(msg, drainCount)
 }
 
 func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {

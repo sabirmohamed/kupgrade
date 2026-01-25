@@ -11,7 +11,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// upgradeRelevantReasons from ADR-008
+// upgradeRelevantReasons filters K8s Events to upgrade-relevant ones.
+// Note: Pod lifecycle events (Killing, Scheduled, Evicted) are intentionally
+// excluded since PodWatcher already tracks these more precisely.
 var upgradeRelevantReasons = map[string]bool{
 	// Node lifecycle
 	"NodeReady":               true,
@@ -21,21 +23,15 @@ var upgradeRelevantReasons = map[string]bool{
 	"Rebooted":                true,
 	"NodeAllocatableEnforced": true,
 
-	// Drain operations
+	// Drain operations (node-level)
 	"Drain":       true,
 	"FailedDrain": true,
 	"Cordon":      true,
 	"Uncordon":    true,
 
-	// Pod disruption
-	"Evicted":       true,
-	"Preempted":     true,
-	"Killing":       true,
-	"FailedKillPod": true,
-
-	// Scheduling
+	// Failures only (not normal pod lifecycle)
+	"FailedKillPod":    true,
 	"FailedScheduling": true,
-	"Scheduled":        true,
 	"FailedBinding":    true,
 
 	// PDB (blockers)
@@ -48,7 +44,7 @@ var upgradeRelevantReasons = map[string]bool{
 	"FailedDetachVolume": true,
 	"VolumeFailedDelete": true,
 
-	// Health
+	// Health issues
 	"Unhealthy":           true,
 	"ProbeWarning":        true,
 	"BackOff":             true,

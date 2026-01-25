@@ -23,6 +23,9 @@ type EventEmitter interface {
 
 	// EmitNodeState sends a node state update. MUST NOT block.
 	EmitNodeState(state types.NodeState)
+
+	// RefreshNodeState triggers a node state refresh (e.g., when pods change).
+	RefreshNodeState(nodeName string)
 }
 
 // StageComputer determines node upgrade stage from observable state.
