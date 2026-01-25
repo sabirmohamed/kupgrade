@@ -15,6 +15,7 @@ const (
 	eventBufferSize     = 100
 	nodeStateBufferSize = 50
 	podStateBufferSize  = 200
+	blockerBufferSize   = 50
 )
 
 // Compile-time interface check
@@ -28,11 +29,13 @@ type Manager struct {
 	eventCh     chan types.Event
 	nodeStateCh chan types.NodeState
 	podStateCh  chan types.PodState
+	blockerCh   chan types.Blocker
 	wg          sync.WaitGroup
 
 	nodeWatcher  *NodeWatcher
 	podWatcher   *PodWatcher
 	eventWatcher *EventWatcher
+	pdbWatcher   *PDBWatcher
 	migrations   MigrationTracker
 	stages       StageComputer
 }
@@ -42,6 +45,7 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 	eventCh := make(chan types.Event, eventBufferSize)
 	nodeStateCh := make(chan types.NodeState, nodeStateBufferSize)
 	podStateCh := make(chan types.PodState, podStateBufferSize)
+	blockerCh := make(chan types.Blocker, blockerBufferSize)
 
 	stages := NewStageComputer(targetVersion)
 	migrations := NewMigrationTracker()
@@ -52,6 +56,7 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 		eventCh:     eventCh,
 		nodeStateCh: nodeStateCh,
 		podStateCh:  podStateCh,
+		blockerCh:   blockerCh,
 		stages:      stages,
 		migrations:  migrations,
 	}
@@ -60,6 +65,7 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 	m.podWatcher = NewPodWatcher(factory, namespace, m, stages, migrations)
 	m.nodeWatcher = NewNodeWatcher(factory, m, stages, m.countPodsOnNode)
 	m.eventWatcher = NewEventWatcher(factory, namespace, m)
+	m.pdbWatcher = NewPDBWatcher(factory, namespace, m)
 
 	return m
 }
@@ -82,6 +88,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("watcher: %w", err)
 	}
 	if err := m.eventWatcher.Start(ctx); err != nil {
+		return fmt.Errorf("watcher: %w", err)
+	}
+	if err := m.pdbWatcher.Start(ctx); err != nil {
 		return fmt.Errorf("watcher: %w", err)
 	}
 
@@ -108,6 +117,11 @@ func (m *Manager) NodeStateUpdates() <-chan types.NodeState {
 // PodStateUpdates returns channel for pod state changes
 func (m *Manager) PodStateUpdates() <-chan types.PodState {
 	return m.podStateCh
+}
+
+// BlockerUpdates returns channel for blocker changes
+func (m *Manager) BlockerUpdates() <-chan types.Blocker {
+	return m.blockerCh
 }
 
 // Emit sends an event (ring buffer semantics - drops oldest if full)
@@ -149,6 +163,19 @@ func (m *Manager) EmitPodState(state types.PodState) {
 	}
 }
 
+// EmitBlocker sends a blocker update (ring buffer semantics)
+func (m *Manager) EmitBlocker(blocker types.Blocker) {
+	select {
+	case m.blockerCh <- blocker:
+	default:
+		select {
+		case <-m.blockerCh:
+		default:
+		}
+		m.blockerCh <- blocker
+	}
+}
+
 // RefreshNodeState re-emits the current state of a node (called when pods change)
 func (m *Manager) RefreshNodeState(nodeName string) {
 	// Find the node in the informer store
@@ -175,7 +202,8 @@ func (m *Manager) StageComputer() StageComputer {
 func (m *Manager) HasSynced() bool {
 	return m.nodeWatcher.informer.HasSynced() &&
 		m.podWatcher.informer.HasSynced() &&
-		m.eventWatcher.informer.HasSynced()
+		m.eventWatcher.informer.HasSynced() &&
+		m.pdbWatcher.informer.HasSynced()
 }
 
 // InitialNodeStates returns current state of all nodes (for initial TUI load)
@@ -186,6 +214,11 @@ func (m *Manager) InitialNodeStates() []types.NodeState {
 // InitialPodStates returns current state of all pods (for initial TUI load)
 func (m *Manager) InitialPodStates() []types.PodState {
 	return m.podWatcher.buildPodStates()
+}
+
+// InitialBlockers returns current blockers (for initial TUI load)
+func (m *Manager) InitialBlockers() []types.Blocker {
+	return m.pdbWatcher.buildBlockers()
 }
 
 // countPodsOnNode counts pods assigned to a node from the pod informer store

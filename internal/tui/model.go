@@ -36,14 +36,16 @@ const (
 
 // Config holds TUI configuration
 type Config struct {
-	Context       string
-	ServerVersion string
-	TargetVersion string
-	InitialNodes  []types.NodeState
-	InitialPods   []types.PodState
-	EventCh       <-chan types.Event
-	NodeStateCh   <-chan types.NodeState
-	PodStateCh    <-chan types.PodState
+	Context         string
+	ServerVersion   string
+	TargetVersion   string
+	InitialNodes    []types.NodeState
+	InitialPods     []types.PodState
+	InitialBlockers []types.Blocker
+	EventCh         <-chan types.Event
+	NodeStateCh     <-chan types.NodeState
+	PodStateCh      <-chan types.PodState
+	BlockerCh       <-chan types.Blocker
 }
 
 // Model is the TUI state
@@ -104,6 +106,9 @@ func New(cfg Config) Model {
 		m.pods[pod.Namespace+"/"+pod.Name] = pod
 	}
 
+	// Load initial blockers
+	m.blockers = append(m.blockers, cfg.InitialBlockers...)
+
 	return m
 }
 
@@ -112,6 +117,7 @@ func (m Model) Init() tea.Cmd {
 		waitForEvent(m.config.EventCh),
 		waitForNodeState(m.config.NodeStateCh),
 		waitForPodState(m.config.PodStateCh),
+		waitForBlocker(m.config.BlockerCh),
 		tick(),
 		spinnerTick(),
 	)
@@ -144,6 +150,16 @@ func waitForPodState(ch <-chan types.PodState) tea.Cmd {
 			return nil
 		}
 		return PodUpdateMsg{Pod: state}
+	}
+}
+
+func waitForBlocker(ch <-chan types.Blocker) tea.Cmd {
+	return func() tea.Msg {
+		blocker, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return BlockerMsg{Blocker: blocker}
 	}
 }
 

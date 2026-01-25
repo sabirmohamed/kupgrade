@@ -244,11 +244,19 @@ func (m Model) renderBlockersPanel(width int) string {
 	lines = append(lines, title)
 
 	for _, blocker := range m.blockers {
-		line := fmt.Sprintf("%s: %s", blocker.Type, blocker.Name)
-		if blocker.Detail != "" {
-			line += " - " + blocker.Detail
+		// Show namespace/name for namespaced resources
+		name := blocker.Name
+		if blocker.Namespace != "" {
+			name = blocker.Namespace + "/" + blocker.Name
 		}
+		line := fmt.Sprintf("%s: %s", blocker.Type, name)
 		lines = append(lines, errorStyle.Render(line))
+
+		// Show detail on next line with indent
+		if blocker.Detail != "" {
+			detail := "  └─ " + blocker.Detail
+			lines = append(lines, warningStyle.Render(truncateString(detail, width-4)))
+		}
 	}
 
 	content := strings.Join(lines, "\n")
@@ -916,30 +924,32 @@ func (m Model) renderBlockersScreen() string {
 	if len(m.blockers) == 0 {
 		b.WriteString(successStyle.Render("  No blockers detected"))
 	} else {
-		// Table header
-		header := fmt.Sprintf("  %-15s %-30s %-15s %-15s",
-			"TYPE", "NAME", "IMPACT", "NODE")
-		b.WriteString(panelTitleStyle.Render(header))
-		b.WriteString("\n")
-
 		for i, blocker := range m.blockers {
 			cursor := "  "
 			if i == m.listIndex {
 				cursor = "► "
 			}
 
-			line := fmt.Sprintf("%s%-15s %-30s %-15s %-15s",
-				cursor,
-				blocker.Type,
-				truncateString(blocker.Name, 30),
-				truncateString(blocker.Detail, 15),
-				blocker.NodeName,
-			)
+			// Show namespace/name for namespaced resources
+			name := blocker.Name
+			if blocker.Namespace != "" {
+				name = blocker.Namespace + "/" + blocker.Name
+			}
+
+			// First line: type and name
+			line1 := fmt.Sprintf("%s%s: %s", cursor, blocker.Type, name)
+
+			// Second line: detail (why it's blocking)
+			line2 := fmt.Sprintf("    └─ %s", blocker.Detail)
 
 			if i == m.listIndex {
-				b.WriteString(errorStyle.Render(line))
+				b.WriteString(errorStyle.Render(line1))
+				b.WriteString("\n")
+				b.WriteString(warningStyle.Render(line2))
 			} else {
-				b.WriteString(warningStyle.Render(line))
+				b.WriteString(warningStyle.Render(line1))
+				b.WriteString("\n")
+				b.WriteString(footerDescStyle.Render(line2))
 			}
 			b.WriteString("\n")
 		}

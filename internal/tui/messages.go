@@ -17,6 +17,11 @@ type PodUpdateMsg struct {
 	Pod types.PodState
 }
 
+// BlockerMsg indicates a blocker state changed
+type BlockerMsg struct {
+	Blocker types.Blocker
+}
+
 // ErrorMsg indicates an error occurred
 type ErrorMsg struct {
 	Err         error

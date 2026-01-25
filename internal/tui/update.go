@@ -30,6 +30,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handlePodUpdate(msg.Pod)
 		return m, waitForPodState(m.config.PodStateCh)
 
+	case BlockerMsg:
+		m.handleBlockerUpdate(msg.Blocker)
+		return m, waitForBlocker(m.config.BlockerCh)
+
 	case EventMsg:
 		m.handleEvent(msg.Event)
 		return m, waitForEvent(m.config.EventCh)
@@ -299,6 +303,33 @@ func (m *Model) handlePodUpdate(pod types.PodState) {
 		delete(m.pods, key)
 	} else {
 		m.pods[key] = pod
+	}
+}
+
+// handleBlockerUpdate adds or removes blockers
+func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
+	// Generate key for deduplication
+	key := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name
+
+	if blocker.Cleared {
+		// Remove blocker
+		for i, b := range m.blockers {
+			bKey := string(b.Type) + "/" + b.Namespace + "/" + b.Name
+			if bKey == key {
+				m.blockers = append(m.blockers[:i], m.blockers[i+1:]...)
+				return
+			}
+		}
+	} else {
+		// Add or update blocker
+		for i, b := range m.blockers {
+			bKey := string(b.Type) + "/" + b.Namespace + "/" + b.Name
+			if bKey == key {
+				m.blockers[i] = blocker
+				return
+			}
+		}
+		m.blockers = append(m.blockers, blocker)
 	}
 }
 

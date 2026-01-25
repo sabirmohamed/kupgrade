@@ -52,14 +52,16 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}
 
 	model := tui.New(tui.Config{
-		Context:       client.Context,
-		ServerVersion: serverVersion,
-		TargetVersion: detectedTarget,
-		InitialNodes:  manager.InitialNodeStates(),
-		InitialPods:   manager.InitialPodStates(),
-		EventCh:       manager.Events(),
-		NodeStateCh:   manager.NodeStateUpdates(),
-		PodStateCh:    manager.PodStateUpdates(),
+		Context:         client.Context,
+		ServerVersion:   serverVersion,
+		TargetVersion:   detectedTarget,
+		InitialNodes:    manager.InitialNodeStates(),
+		InitialPods:     manager.InitialPodStates(),
+		InitialBlockers: manager.InitialBlockers(),
+		EventCh:         manager.Events(),
+		NodeStateCh:     manager.NodeStateUpdates(),
+		PodStateCh:      manager.PodStateUpdates(),
+		BlockerCh:       manager.BlockerUpdates(),
 	})
 
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())

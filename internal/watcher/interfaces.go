@@ -27,6 +27,9 @@ type EventEmitter interface {
 	// EmitPodState sends a pod state update. MUST NOT block.
 	EmitPodState(state types.PodState)
 
+	// EmitBlocker sends a blocker update. MUST NOT block.
+	EmitBlocker(blocker types.Blocker)
+
 	// RefreshNodeState triggers a node state refresh (e.g., when pods change).
 	RefreshNodeState(nodeName string)
 }
