@@ -28,8 +28,6 @@ func (m Model) renderOverview() string {
 
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
-	b.WriteString(m.renderStageFlow())
-	b.WriteString("\n\n")
 	b.WriteString(m.renderMainContent())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderBottomPanels())
@@ -74,63 +72,46 @@ func (m Model) renderProgressBar(width int) string {
 	return progressStyle.Render(bar)
 }
 
-func (m Model) renderStageFlow() string {
+func (m Model) renderMainContent() string {
+	return m.renderNodeColumns()
+}
+
+func (m Model) renderNodeColumns() string {
 	stages := types.AllStages()
-	var headers []string
-	var counts []string
+	columns := make([]string, len(stages))
+	cardWidth := m.nodeCardWidth()
 
 	for i, stage := range stages {
 		name := string(stage)
 		count := len(m.nodesByStage[stage])
 
+		// Stage header
 		var header string
 		if i == m.selectedStage {
 			header = stageStyleSelected(name).Render(name)
 		} else {
 			header = stageStyle(name).Render(name)
 		}
-		headers = append(headers, centerText(header, 12))
-		counts = append(counts, centerText(fmt.Sprintf("%d", count), 12))
-	}
 
-	var headerRow, countRow strings.Builder
+		// Build column: header + count + nodes
+		var columnParts []string
+		columnParts = append(columnParts, centerText(header, cardWidth))
+		columnParts = append(columnParts, centerText(fmt.Sprintf("%d", count), cardWidth))
+		columnParts = append(columnParts, "") // spacer
 
-	for i := range stages {
-		if i > 0 {
-			headerRow.WriteString("  " + stageArrow + "  ")
-			countRow.WriteString("       ")
-		}
-		headerRow.WriteString(headers[i])
-		countRow.WriteString(counts[i])
-	}
-
-	return headerRow.String() + "\n" + countRow.String()
-}
-
-func (m Model) renderMainContent() string {
-	return m.renderNodeCards()
-}
-
-func (m Model) renderNodeCards() string {
-	stages := types.AllStages()
-	columns := make([]string, len(stages))
-	cardWidth := m.nodeCardWidth()
-
-	for i, stage := range stages {
+		// Node cards
 		nodes := m.nodesByStage[stage]
-		var cards []string
-
 		if len(nodes) == 0 {
-			cards = append(cards, m.renderEmptyStage(cardWidth))
+			columnParts = append(columnParts, m.renderEmptyStage(cardWidth))
 		} else {
 			for j, nodeName := range nodes {
 				node := m.nodes[nodeName]
 				isSelected := i == m.selectedStage && j == m.selectedNode
-				cards = append(cards, m.renderNodeCard(node, isSelected, cardWidth))
+				columnParts = append(columnParts, m.renderNodeCard(node, isSelected, cardWidth))
 			}
 		}
 
-		columns[i] = lipgloss.JoinVertical(lipgloss.Left, cards...)
+		columns[i] = lipgloss.JoinVertical(lipgloss.Left, columnParts...)
 	}
 
 	var parts []string
