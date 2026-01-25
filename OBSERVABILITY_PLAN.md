@@ -178,36 +178,38 @@ Eviction progress, queue, and stuck pods.
 
 ---
 
-### [3] PODS Screen
+### [3] PODS Screen ✅ Implemented
 
-Pod health, probes, and phase by node.
+Pod health, probes, owner, and phase grouped by node.
 
 ```
-⎈ kupgrade › PODS                                           [0] back
+⎈ kupgrade › PODS | v1.32.1 | ████████░░ 0% | 21:40:28
+pods(66)
+  NAMESPACE    NAME                                    READY STATUS           RS PROBE OWNER        NODE                              AGE
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+► default      probe-test-both-fail                      0/1 CrashLoopBackOff 17 R✗ L✗ <none>       aks-agentpool-84629564-vmss000000  34m
+  default      probe-test-no-probes                      1/1 Running           0 ·· ·· <none>       aks-agentpool-84629564-vmss000000  34m
+  kube-system  ama-metrics-cb8b846d-ktff6                2/2 Running           1 ·· L✓ ReplicaSet   aks-agentpool-84629564-vmss000000  8h3m
+  kube-system  coredns-6865d647c6-gpkmg                  1/1 Running           0 R✓ L✓ ReplicaSet   aks-agentpool-84629564-vmss000000  8h
+·····················································································································
+  kube-system  ama-metrics-node-thszc                    2/2 Running           0 R✓ L✓ DaemonSet    aks-agentpool-84629564-vmss000001  8h1m
+  kube-system  azure-cns-bjzcr                           1/1 Running           0 R✓ L✓ DaemonSet    aks-agentpool-84629564-vmss000001  8h1m
 
-  NODE       POD                        PHASE     READY   PROBES    AGE
-  node-04    coredns-5d78c9f8b4-xyz    Running   1/1     ✓ L ✓ R   4h
-  node-04    nginx-deployment-7b4d     Running   1/1     ✓ L ✓ R   2h
-► node-04    app-backend-6f9d          Running   0/1     ✓ L ✗ R   1h
-  node-05    (no pods - upgrading)
-  node-01    redis-cache-0             Running   1/1     ✓ L ✓ R   5m
-
-  POD DETAIL (app-backend-6f9d):
-  ├─ Readiness Probe: FAILING (HTTP GET /health → 503)
-  ├─ Last Success: 3m ago
-  └─ Restart Count: 2
-
-[enter] describe  [l] logs  [/] filter  [0] back
+↑↓ scroll  g/G top/bottom  ⏎ details
+0 overview  1 nodes  2 drains  3 pods  4 blockers  5 events  6 stats  ? help  q quit
 ```
 
-**Data to display:**
-- Pods grouped by node
-- Pod phase (Running, Pending, Failed, etc.)
-- Ready containers (1/1, 0/1)
-- Probe status (Liveness ✓/✗, Readiness ✓/✗)
-- Pod age
-- Restart count
-- Probe failure details
+**Implemented features:**
+- ✅ Pods grouped by node with visual separators
+- ✅ Pod status with container states (CrashLoopBackOff, ImagePullBackOff, Terminating)
+- ✅ Ready containers (1/1, 0/1) - right-aligned
+- ✅ Probe status: `R✓` Readiness, `L✓` Liveness, `··` not configured
+- ✅ Restart count (RS) - color-coded (red >5, yellow >0)
+- ✅ Owner kind (DaemonSet, ReplicaSet, PodTemplate, StatefulSet)
+- ✅ Pod age - right-aligned
+- ✅ Column width caps to prevent excessive spacing
+- ✅ Mouse scroll support
+- ✅ Keyboard navigation (↑↓/jk, g/G, Ctrl+U/D)
 
 ---
 
@@ -351,40 +353,78 @@ Timing, velocity, ETA, and history.
 
 ---
 
-## Implementation Epics
+## Implementation Status
+
+### Completed ✅
+
+| Epic | Screen | Status | Notes |
+|------|--------|--------|-------|
+| E0 | Navigation framework | ✅ Done | Screen switching (0-6), two-row footer, mouse support |
+| E1 | [1] NODES screen | ✅ Done | Conditions, taints, age, version, stage colors |
+| E3 | [2] DRAINS screen | ✅ Done | Progress bars, eviction queue, stuck detection |
+| E4 | [3] PODS screen | ✅ Done | Probes (R✓/L✓), owner, status, node grouping, restarts |
+| E5 | [5] EVENTS screen | ✅ Done | Live event stream, severity colors, timestamps |
+
+### In Progress 🔄
+
+| Epic | Screen | Status | Notes |
+|------|--------|--------|-------|
+| E2 | [4] BLOCKERS screen | 🔄 Partial | UI exists, needs PDB/local storage detection |
+| E6 | [6] STATS screen | 🔄 Partial | UI exists, needs velocity/ETA calculation |
+
+### Not Started ⬚
+
+| Epic | Feature | Notes |
+|------|---------|-------|
+| E7 | [/] Filter system | Filter by node/namespace |
+| E8 | Attention system | Surface problems on Overview |
+
+### UX Enhancements (Added)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Omarchy Tokyo Night theme | ✅ Done | Full color palette, selection highlight, text hierarchy |
+| Two-row footer | ✅ Done | Row 1: context hints, Row 2: screen navigation |
+| Mouse scroll | ✅ Done | Scroll in all list screens |
+| Keyboard navigation | ✅ Done | ↑↓/jk scroll, g/G top/bottom, Ctrl+U/D page |
+| Column alignment | ✅ Done | Right-align numbers, max width caps |
+
+---
+
+## Implementation Epics (Original Plan)
 
 ### Phase 1: Foundation (prerequisite for all screens)
 
-| Epic | Description | Complexity |
-|------|-------------|------------|
-| E0 | Screen navigation framework + state architecture | Medium |
+| Epic | Description | Complexity | Status |
+|------|-------------|------------|--------|
+| E0 | Screen navigation framework + state architecture | Medium | ✅ Done |
 
 ### Phase 2: Core Visibility (MVP)
 
-| Epic | Screen | Value | Complexity |
-|------|--------|-------|------------|
-| E1 | [1] NODES screen | Validates framework, shows stage progression | Low |
-| E2 | [4] BLOCKERS screen | High value - explains why things are stuck | High |
-| E3 | [2] DRAINS screen | High value - real-time eviction progress | High |
+| Epic | Screen | Value | Complexity | Status |
+|------|--------|-------|------------|--------|
+| E1 | [1] NODES screen | Validates framework, shows stage progression | Low | ✅ Done |
+| E2 | [4] BLOCKERS screen | High value - explains why things are stuck | High | 🔄 Partial |
+| E3 | [2] DRAINS screen | High value - real-time eviction progress | High | ✅ Done |
 
 ### Phase 3: Enhanced Observability
 
-| Epic | Screen | Value | Complexity |
-|------|--------|-------|------------|
-| E4 | [3] PODS screen | Pod-level detail for debugging | Medium |
-| E5 | [5] EVENTS screen | Full event history | Low |
-| E6 | [6] STATS screen | Timing, velocity, ETA | Medium |
-| E7 | [/] Filter system | Navigate large clusters | Medium |
-| E8 | Attention system | Surface problems on Overview | Medium |
+| Epic | Screen | Value | Complexity | Status |
+|------|--------|-------|------------|--------|
+| E4 | [3] PODS screen | Pod-level detail for debugging | Medium | ✅ Done |
+| E5 | [5] EVENTS screen | Full event history | Low | ✅ Done |
+| E6 | [6] STATS screen | Timing, velocity, ETA | Medium | 🔄 Partial |
+| E7 | [/] Filter system | Navigate large clusters | Medium | ⬚ Not started |
+| E8 | Attention system | Surface problems on Overview | Medium | ⬚ Not started |
 
 **Dependency graph:**
 ```
-E0 (navigation)
- ├── E1 (NODES) ─────────────────────┐
- ├── E2 (BLOCKERS) ──┐               │
- └── E3 (DRAINS) ────┴── E8 (Attention) ── Overview alerts
+E0 (navigation) ✅
+ ├── E1 (NODES) ✅ ──────────────────┐
+ ├── E2 (BLOCKERS) 🔄 ─┐             │
+ └── E3 (DRAINS) ✅ ───┴── E8 (Attention) ⬚ ── Overview alerts
       │
-      └── E4 (PODS) ── E5 (EVENTS) ── E6 (STATS) ── E7 (Filters)
+      └── E4 (PODS) ✅ ── E5 (EVENTS) ✅ ── E6 (STATS) 🔄 ── E7 (Filters) ⬚
 ```
 
 ---
@@ -430,23 +470,45 @@ E0 (navigation)
 
 All shortcuts are **navigation only** - kupgrade is read-only and never modifies cluster state.
 
-| Key | Action |
-|-----|--------|
-| `0` | Overview (default) |
-| `1` | Nodes screen |
-| `2` | Drains screen |
-| `3` | Pods screen |
-| `4` | Blockers screen |
-| `5` | Events screen |
-| `6` | Stats screen |
-| `/` | Filter |
-| `?` | Help |
-| `q` | Quit |
-| `Enter` | Select/Details (view more info) |
-| `Esc` | Back to previous screen |
-| `↑↓` or `jk` | Navigate list |
-| `g` / `G` | Jump to top / bottom of list |
-| `f` | Toggle follow mode (Events screen) |
+### Screen Navigation
+| Key | Action | Status |
+|-----|--------|--------|
+| `0` | Overview (default) | ✅ |
+| `1` | Nodes screen | ✅ |
+| `2` | Drains screen | ✅ |
+| `3` | Pods screen | ✅ |
+| `4` | Blockers screen | ✅ |
+| `5` | Events screen | ✅ |
+| `6` | Stats screen | ✅ |
+| `?` | Help overlay | ✅ |
+| `q` / `Ctrl+C` | Quit | ✅ |
+
+### List Navigation
+| Key | Action | Status |
+|-----|--------|--------|
+| `↑` / `k` | Move up | ✅ |
+| `↓` / `j` | Move down | ✅ |
+| `g` | Jump to top | ✅ |
+| `G` | Jump to bottom | ✅ |
+| `Ctrl+U` | Page up | ✅ |
+| `Ctrl+D` | Page down | ✅ |
+| `Enter` / `⏎` | Select/Details | ✅ |
+| `Esc` | Back to Overview | ✅ |
+| Mouse scroll | Scroll list | ✅ |
+
+### Overview Screen
+| Key | Action | Status |
+|-----|--------|--------|
+| `←` / `h` | Previous stage | ✅ |
+| `→` / `l` | Next stage | ✅ |
+| `↑` / `k` | Previous node | ✅ |
+| `↓` / `j` | Next node | ✅ |
+
+### Not Yet Implemented
+| Key | Action | Status |
+|-----|--------|--------|
+| `/` | Filter | ⬚ |
+| `f` | Toggle follow mode (Events) | ⬚ |
 
 ---
 

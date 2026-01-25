@@ -396,6 +396,98 @@ For deeper understanding of Go design principles, see:
 
 ---
 
+## Recent Implementation Progress (2025-01-25)
+
+### Completed This Session ✅
+
+| Feature | Files Modified | Notes |
+|---------|----------------|-------|
+| Omarchy Tokyo Night theme | `internal/tui/styles.go` | Full color palette with layered backgrounds, text hierarchy, ANSI colors |
+| PODS screen | `internal/tui/view.go` | Real-time pod table with namespace, status, restarts, probes, owner |
+| RESTARTS column enhancement | `internal/watcher/pods.go`, `pkg/types/pod.go` | Shows "27 4m" format (count + time since last restart) |
+| Two-row footer | `internal/tui/view.go` | Row 1: context hints, Row 2: screen navigation |
+| Keyboard simplification | `internal/tui/keys.go` | Removed PgUp/PgDn, kept Ctrl+U/D for page navigation |
+| Column width caps | `internal/tui/view.go` | Prevents excessive spacing on wide terminals |
+| computePodStatus() | `internal/watcher/pods.go` | k9s-style detailed status (CrashLoopBackOff, Init:Error, Terminating) |
+
+### Key Code Additions
+
+**getRestartInfo()** - `internal/watcher/pods.go:283-318`
+```go
+func getRestartInfo(pod *corev1.Pod) (int, string) {
+    // Returns restart count + age since most recent restart
+    // Checks both regular and init container lastState.terminated.finishedAt
+}
+```
+
+**PodState.LastRestartAge** - `pkg/types/pod.go:13`
+```go
+LastRestartAge  string // e.g., "4m", "8h" - empty if no restarts
+```
+
+---
+
+## BMAD Team Review (2025-01-25)
+
+Multi-agent review of commits and architecture.
+
+### Team Feedback Summary
+
+| Agent | Role | Assessment |
+|-------|------|------------|
+| Winston (Architect) | Architecture | ✅ Clean and scalable - proper event-driven design, single source of truth |
+| Sally (UX Designer) | User Experience | ✅ Serves real operators - meaningful information density |
+| Murat (Test Architect) | Test Coverage | ⚠️ Critical gap - no watcher/TUI tests |
+| Mary (Analyst) | Requirements | ⚠️ E2 BLOCKERS should be prioritized |
+
+### Key Recommendations
+
+1. **Add watcher tests** - Migration tracking logic and pod state computations need unit tests
+2. **Prioritize BLOCKERS screen** - Most valuable for upgrade monitoring (E2 in OBSERVABILITY_PLAN.md)
+3. **Add PDB detection** - Pod Disruption Budgets are critical for safe upgrades
+4. **Interface for testability** - Extract channel dependencies behind interfaces
+
+---
+
+## Priority Roadmap (Post-Review)
+
+### Immediate Priority: BLOCKERS Screen (E2)
+
+The BLOCKERS screen is the most operationally valuable feature for upgrade monitoring.
+
+**Planned Implementation:**
+1. PDB (Pod Disruption Budget) violations
+2. Node taints preventing scheduling
+3. Resource constraints blocking eviction
+4. Critical pods that can't be evicted
+
+**Files to modify:**
+- `internal/watcher/` - New blocker detection logic
+- `internal/tui/view.go` - BLOCKERS screen rendering
+- `pkg/types/` - BlockerState type
+
+### Priority Queue
+
+| # | Item | Type | Effort | Rationale |
+|---|------|------|--------|-----------|
+| 1 | **BLOCKERS screen + PDB detection** | Feature | Medium | Most valuable for upgrades - answers "why isn't my upgrade progressing?" |
+| 2 | P6/G1: Package-level ConfigFlags | Refactor | Medium | Google Style violation, affects testability |
+| 3 | P7/G2: Type assertion without check | Refactor | Low | Panic risk in manager.go |
+| 4 | T7: Basic watcher tests | Tests | Medium | Migration logic untested |
+| 5 | T7: Basic TUI tests | Tests | Medium | Navigation and state untested |
+| 6 | T2: Extract magic numbers | Cleanup | Low | Maintainability |
+| 7 | T3: Migrate to Bubbles | Enhancement | Medium | Reuse Charm components |
+
+### Deferred (Nice to Have)
+
+- T1: Component abstraction
+- T4: Consistent receiver types
+- T5: Status bar for non-fatal errors
+- T6: Interface for channel testability
+- P8: Why comments
+
+---
+
 ## TUI Implementation Review (2025-01-25)
 
 Analysis of Bubble Tea and Lip Gloss usage in `internal/tui/`.

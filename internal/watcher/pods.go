@@ -207,6 +207,7 @@ func (w *PodWatcher) buildState(pod *corev1.Pod) types.PodState {
 	readyContainers, totalContainers := countReadyContainers(pod)
 	hasLiveness, hasReadiness := hasProbes(pod)
 	livenessOK, readinessOK := checkProbeStatus(pod)
+	restarts, lastRestartAge := getRestartInfo(pod)
 
 	return types.PodState{
 		Name:            pod.Name,
@@ -216,7 +217,8 @@ func (w *PodWatcher) buildState(pod *corev1.Pod) types.PodState {
 		ReadyContainers: readyContainers,
 		TotalContainers: totalContainers,
 		Phase:           computePodStatus(pod),
-		Restarts:        countRestarts(pod),
+		Restarts:        restarts,
+		LastRestartAge:  lastRestartAge,
 		Age:             formatAge(pod.CreationTimestamp.Time),
 		HasLiveness:     hasLiveness,
 		HasReadiness:    hasReadiness,
@@ -278,13 +280,41 @@ func (w *PodWatcher) buildPodStates() []types.PodState {
 	return states
 }
 
-// countRestarts sums restart counts across all containers
-func countRestarts(pod *corev1.Pod) int {
+// getRestartInfo returns total restart count and age since most recent restart
+// Returns (restarts, lastRestartAge) where lastRestartAge is like "4m", "8h", or "" if no restarts
+func getRestartInfo(pod *corev1.Pod) (int, string) {
 	restarts := 0
+	var mostRecentRestart time.Time
+
 	for _, cs := range pod.Status.ContainerStatuses {
 		restarts += int(cs.RestartCount)
+
+		// Check lastState.terminated.finishedAt for when container last died
+		if cs.LastTerminationState.Terminated != nil {
+			finishedAt := cs.LastTerminationState.Terminated.FinishedAt.Time
+			if finishedAt.After(mostRecentRestart) {
+				mostRecentRestart = finishedAt
+			}
+		}
 	}
-	return restarts
+
+	// Also check init containers
+	for _, cs := range pod.Status.InitContainerStatuses {
+		restarts += int(cs.RestartCount)
+		if cs.LastTerminationState.Terminated != nil {
+			finishedAt := cs.LastTerminationState.Terminated.FinishedAt.Time
+			if finishedAt.After(mostRecentRestart) {
+				mostRecentRestart = finishedAt
+			}
+		}
+	}
+
+	lastRestartAge := ""
+	if restarts > 0 && !mostRecentRestart.IsZero() {
+		lastRestartAge = formatAge(mostRecentRestart)
+	}
+
+	return restarts, lastRestartAge
 }
 
 // countReadyContainers returns ready/total container counts

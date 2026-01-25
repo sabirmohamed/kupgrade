@@ -659,9 +659,9 @@ func (m Model) renderPodsScreen() string {
 			availWidth = 120
 		}
 
-		// Fixed columns: READY(5), STATUS(16), RS(3), PROBES(5), OWNER(12), AGE(5) = ~50
+		// Fixed columns: READY(5), STATUS(16), RESTARTS(10), PROBES(5), OWNER(12), AGE(5) = ~57
 		// Variable columns: NAMESPACE, NAME, NODE share remaining space
-		fixedWidth := 50
+		fixedWidth := 57
 		varWidth := availWidth - fixedWidth
 		nsWidth := varWidth * 15 / 100  // 15%
 		nameWidth := varWidth * 40 / 100 // 40%
@@ -714,10 +714,10 @@ func (m Model) renderPodsScreen() string {
 		b.WriteString(fmt.Sprintf("  pods(%d)%s%s\n", total, filterNote, scrollInfo))
 
 		// Table header with separator
-		headerFmt := fmt.Sprintf("  %%-%ds %%-%ds %%5s %%-16s %%3s %%-5s %%-12s %%-%ds %%5s",
+		headerFmt := fmt.Sprintf("  %%-%ds %%-%ds %%5s %%-16s %%-10s %%-5s %%-12s %%-%ds %%5s",
 			nsWidth, nameWidth, nodeWidth)
 		header := fmt.Sprintf(headerFmt,
-			"NAMESPACE", "NAME", "READY", "STATUS", "RS", "PROBE", "OWNER", "NODE", "AGE")
+			"NAMESPACE", "NAME", "READY", "STATUS", "RESTARTS", "PROBE", "OWNER", "NODE", "AGE")
 		b.WriteString(panelTitleStyle.Render(header))
 		b.WriteString("\n")
 
@@ -784,9 +784,18 @@ func (m Model) renderPodsScreen() string {
 				statusStyle = errorStyle
 			}
 
-			// Restarts (compact)
-			restartStr := fmt.Sprintf("%d", pod.Restarts)
+			// Restarts with time since last restart (like kubectl)
+			// Format: "23 4m" (count + time since last restart)
+			var restartStr string
 			restartStyle := footerDescStyle
+			if pod.Restarts == 0 {
+				restartStr = "0"
+			} else if pod.LastRestartAge != "" {
+				restartStr = fmt.Sprintf("%d %s", pod.Restarts, pod.LastRestartAge)
+			} else {
+				restartStr = fmt.Sprintf("%d", pod.Restarts)
+			}
+
 			if pod.Restarts > 5 {
 				restartStyle = errorStyle
 			} else if pod.Restarts > 0 {
@@ -853,7 +862,7 @@ func (m Model) renderPodsScreen() string {
 
 			b.WriteString(readyStyle.Render(fmt.Sprintf("%5s ", readyStr)))
 			b.WriteString(statusStyle.Render(fmt.Sprintf("%-16s ", status)))
-			b.WriteString(restartStyle.Render(fmt.Sprintf("%3s ", restartStr)))
+			b.WriteString(restartStyle.Render(fmt.Sprintf("%-10s ", restartStr)))
 			b.WriteString(rStyle.Render(rProbe))
 			b.WriteString(" ")
 			b.WriteString(lStyle.Render(lProbe))
