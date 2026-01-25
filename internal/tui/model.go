@@ -20,14 +20,6 @@ const (
 	ViewHelp
 )
 
-type DrainMode int
-
-const (
-	DrainModeDrain DrainMode = iota
-	DrainModeCordon
-	DrainModeSchedule
-)
-
 // Config holds TUI configuration
 type Config struct {
 	Context       string
@@ -48,7 +40,6 @@ type Model struct {
 
 	// View state
 	viewMode      ViewMode
-	drainMode     DrainMode
 	selectedStage int
 	selectedNode  int
 
@@ -73,7 +64,6 @@ func New(cfg Config) Model {
 	m := Model{
 		config:       cfg,
 		viewMode:     ViewOverview,
-		drainMode:    DrainModeDrain,
 		nodes:        make(map[string]types.NodeState),
 		nodesByStage: make(map[types.NodeStage][]string),
 		events:       make([]types.Event, 0, maxEvents),

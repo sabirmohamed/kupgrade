@@ -122,20 +122,6 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Mode switches
-	if matchKey(msg, keys.Mode1) {
-		m.drainMode = DrainModeDrain
-		return *m, nil
-	}
-	if matchKey(msg, keys.Mode2) {
-		m.drainMode = DrainModeCordon
-		return *m, nil
-	}
-	if matchKey(msg, keys.Mode3) {
-		m.drainMode = DrainModeSchedule
-		return *m, nil
-	}
-
 	return *m, nil
 }
 

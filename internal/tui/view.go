@@ -27,8 +27,6 @@ func (m Model) renderOverview() string {
 	var b strings.Builder
 
 	b.WriteString(m.renderHeader())
-	b.WriteString("\n")
-	b.WriteString(m.renderModeSelector())
 	b.WriteString("\n\n")
 	b.WriteString(m.renderStageFlow())
 	b.WriteString("\n\n")
@@ -74,22 +72,6 @@ func (m Model) renderProgressBar(width int) string {
 
 	bar := strings.Repeat(progressBarFull, filled) + strings.Repeat(progressBarEmpty, empty)
 	return progressStyle.Render(bar)
-}
-
-func (m Model) renderModeSelector() string {
-	modes := []string{"DRAIN", "CORDON", "SCHEDULE"}
-	var parts []string
-
-	for i, mode := range modes {
-		key := fmt.Sprintf("[%d]", i+1)
-		if DrainMode(i) == m.drainMode {
-			parts = append(parts, footerKeyStyle.Render(key+" "+mode))
-		} else {
-			parts = append(parts, footerDescStyle.Render(key+" "+mode))
-		}
-	}
-
-	return "undrainableNodeBehavior: " + strings.Join(parts, "  ")
 }
 
 func (m Model) renderStageFlow() string {
@@ -364,7 +346,6 @@ func (m Model) renderHelpOverlay() string {
 		footerKeyStyle.Render("↑/k") + "     Previous node",
 		footerKeyStyle.Render("↓/j") + "     Next node",
 		footerKeyStyle.Render("enter") + "   Node details",
-		footerKeyStyle.Render("1/2/3") + "   Switch drain mode",
 		footerKeyStyle.Render("?") + "       Toggle help",
 		footerKeyStyle.Render("esc") + "     Close overlay",
 		footerKeyStyle.Render("q") + "       Quit",

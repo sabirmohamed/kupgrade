@@ -11,9 +11,6 @@ type keyMap struct {
 	Enter  []string
 	Escape []string
 	Help   []string
-	Mode1  []string
-	Mode2  []string
-	Mode3  []string
 }
 
 var keys = keyMap{
@@ -25,9 +22,6 @@ var keys = keyMap{
 	Enter:  []string{"enter"},
 	Escape: []string{"esc"},
 	Help:   []string{"?"},
-	Mode1:  []string{"1"},
-	Mode2:  []string{"2"},
-	Mode3:  []string{"3"},
 }
 
 func matchKey(msg tea.KeyMsg, bindings []string) bool {
