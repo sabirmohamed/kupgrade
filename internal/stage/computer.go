@@ -10,9 +10,10 @@ import (
 
 // Computer implements StageComputer for node stage detection
 type Computer struct {
-	targetVersion string
-	nodePodCounts map[string]int
-	mu            sync.RWMutex
+	targetVersion  string
+	lowestVersion  string
+	nodePodCounts  map[string]int
+	mu             sync.RWMutex
 }
 
 // New creates a new stage computer
@@ -28,14 +29,18 @@ func (c *Computer) ComputeStage(node *corev1.Node) types.NodeStage {
 	c.mu.RLock()
 	podCount := c.nodePodCounts[node.Name]
 	target := c.targetVersion
+	lowest := c.lowestVersion
 	c.mu.RUnlock()
 
 	version := node.Status.NodeInfo.KubeletVersion
 	schedulable := !node.Spec.Unschedulable
 	ready := isNodeReady(node)
 
+	// Check if upgrade is active (mixed versions exist)
+	upgradeActive := lowest != "" && target != "" && lowest != target
+
 	switch {
-	case version == target && ready && schedulable:
+	case upgradeActive && version == target && ready && schedulable:
 		return types.StageComplete
 	case !ready:
 		return types.StageUpgrading
@@ -59,7 +64,7 @@ func (c *Computer) UpdatePodCount(nodeName string, delta int) {
 	}
 }
 
-// SetTargetVersion updates target if version is higher than current
+// SetTargetVersion updates target (highest) and tracks lowest version
 func (c *Computer) SetTargetVersion(version string) {
 	if version == "" {
 		return
@@ -71,6 +76,11 @@ func (c *Computer) SetTargetVersion(version string) {
 	// Keep highest version as target
 	if c.targetVersion == "" || semver.Compare(version, c.targetVersion) > 0 {
 		c.targetVersion = version
+	}
+
+	// Track lowest version to detect active upgrades
+	if c.lowestVersion == "" || semver.Compare(version, c.lowestVersion) < 0 {
+		c.lowestVersion = version
 	}
 }
 
