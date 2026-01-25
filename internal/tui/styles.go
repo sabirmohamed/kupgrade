@@ -4,6 +4,29 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Layout constants (T2: extracted from magic numbers)
+const (
+	// Header
+	headerProgressBarWidth = 10
+
+	// Node cards
+	nodeCardMinWidth = 16
+	nodeCardMaxWidth = 30
+	nodeCardGapWidth = 2
+	stageCount       = 5
+
+	// Events panel
+	eventTypeWidth        = 14
+	eventTimestampWidth   = 8
+	eventIconWidth        = 2
+	eventPaddingTotal     = eventTimestampWidth + eventIconWidth + 4 + 4 // spacing + border/padding
+	eventMinMessageWidth  = 20
+
+	// Panels
+	panelGapWidth = 2
+	panelMinWidth = 25
+)
+
 // Color palette
 var (
 	colorBg        = lipgloss.Color("#0a0a0f")
@@ -119,7 +142,7 @@ var (
 			Foreground(colorTextMuted)
 
 	eventTypeStyle = lipgloss.NewStyle().
-			Width(14)
+			Width(eventTypeWidth)
 
 	infoIcon    = "•"
 	warningIcon = "⚠"

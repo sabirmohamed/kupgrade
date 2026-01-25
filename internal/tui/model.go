@@ -12,12 +12,26 @@ const (
 	maxMigrations = 5
 )
 
-type ViewMode int
+// Screen represents the main navigation screens (0-6)
+type Screen int
 
 const (
-	ViewOverview ViewMode = iota
-	ViewNodeDetail
-	ViewHelp
+	ScreenOverview  Screen = iota // 0 - Pipeline stages with node cards
+	ScreenNodes                   // 1 - Full node details, conditions, taints
+	ScreenDrains                  // 2 - Eviction progress per node
+	ScreenPods                    // 3 - Pod health, probes, phase by node
+	ScreenBlockers                // 4 - PDBs, local storage, stuck evictions
+	ScreenEvents                  // 5 - Full event log with filtering
+	ScreenStats                   // 6 - Timing, velocity, ETA, history
+)
+
+// Overlay represents modal overlays on top of screens
+type Overlay int
+
+const (
+	OverlayNone Overlay = iota
+	OverlayHelp
+	OverlayNodeDetail
 )
 
 // Config holds TUI configuration
@@ -38,10 +52,12 @@ type Model struct {
 	width  int
 	height int
 
-	// View state
-	viewMode      ViewMode
-	selectedStage int
-	selectedNode  int
+	// Navigation state
+	screen        Screen  // Current screen (0-6)
+	overlay       Overlay // Modal overlay (none, help, detail)
+	selectedStage int     // For Overview screen
+	selectedNode  int     // For Overview screen
+	listIndex     int     // For list-based screens (Nodes, Pods, etc.)
 
 	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
@@ -63,7 +79,8 @@ type Model struct {
 func New(cfg Config) Model {
 	m := Model{
 		config:       cfg,
-		viewMode:     ViewOverview,
+		screen:       ScreenOverview,
+		overlay:      OverlayNone,
 		nodes:        make(map[string]types.NodeState),
 		nodesByStage: make(map[types.NodeStage][]string),
 		events:       make([]types.Event, 0, maxEvents),
@@ -127,6 +144,28 @@ func spinnerTick() tea.Cmd {
 func (m Model) contextName() string   { return m.config.Context }
 func (m Model) serverVersion() string { return m.config.ServerVersion }
 func (m Model) targetVersion() string { return m.config.TargetVersion }
+
+// screenName returns the display name for the current screen
+func (m Model) screenName() string {
+	switch m.screen {
+	case ScreenOverview:
+		return ""
+	case ScreenNodes:
+		return "NODES"
+	case ScreenDrains:
+		return "DRAINS"
+	case ScreenPods:
+		return "PODS"
+	case ScreenBlockers:
+		return "BLOCKERS"
+	case ScreenEvents:
+		return "EVENTS"
+	case ScreenStats:
+		return "STATS"
+	default:
+		return ""
+	}
+}
 
 func (m *Model) stageAtIndex(idx int) types.NodeStage {
 	stages := types.AllStages()

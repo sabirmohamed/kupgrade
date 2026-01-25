@@ -47,37 +47,71 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Handle overlays first (they capture input)
+	if m.overlay != OverlayNone {
+		return m.handleOverlayKey(msg)
+	}
+
+	// Quit: from Overview exits, from other screens returns to Overview
 	if matchKey(msg, keys.Quit) {
-		if m.viewMode != ViewOverview {
-			m.viewMode = ViewOverview
+		if m.screen != ScreenOverview {
+			m.screen = ScreenOverview
 			return *m, nil
 		}
 		return *m, tea.Quit
 	}
 
+	// Help overlay toggle
 	if matchKey(msg, keys.Help) {
-		if m.viewMode == ViewHelp {
-			m.viewMode = ViewOverview
-		} else {
-			m.viewMode = ViewHelp
-		}
+		m.overlay = OverlayHelp
 		return *m, nil
 	}
 
+	// Escape: return to Overview
 	if matchKey(msg, keys.Escape) {
-		m.viewMode = ViewOverview
+		m.screen = ScreenOverview
 		return *m, nil
 	}
 
-	switch m.viewMode {
-	case ViewOverview:
-		return m.handleOverviewKey(msg)
-	case ViewNodeDetail:
-		return m.handleNodeDetailKey(msg)
-	case ViewHelp:
-		return m.handleHelpKey(msg)
+	// Screen navigation (0-6)
+	if screen := screenFromKey(msg); screen >= 0 {
+		m.screen = screen
+		m.listIndex = 0 // Reset list position on screen change
+		return *m, nil
 	}
 
+	// Delegate to screen-specific handler
+	switch m.screen {
+	case ScreenOverview:
+		return m.handleOverviewKey(msg)
+	case ScreenNodes:
+		return m.handleNodesKey(msg)
+	case ScreenDrains:
+		return m.handleDrainsKey(msg)
+	case ScreenPods:
+		return m.handlePodsKey(msg)
+	case ScreenBlockers:
+		return m.handleBlockersKey(msg)
+	case ScreenEvents:
+		return m.handleEventsKey(msg)
+	case ScreenStats:
+		return m.handleStatsKey(msg)
+	}
+
+	return *m, nil
+}
+
+func (m *Model) handleOverlayKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Any key closes overlay
+	if matchKey(msg, keys.Escape) || matchKey(msg, keys.Enter) || matchKey(msg, keys.Help) {
+		m.overlay = OverlayNone
+		return *m, nil
+	}
+	// For Help overlay, also close on any other key
+	if m.overlay == OverlayHelp {
+		m.overlay = OverlayNone
+		return *m, nil
+	}
 	return *m, nil
 }
 
@@ -117,7 +151,7 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	if matchKey(msg, keys.Enter) {
 		if _, ok := m.selectedNodeState(); ok {
-			m.viewMode = ViewNodeDetail
+			m.overlay = OverlayNodeDetail
 		}
 		return *m, nil
 	}
@@ -125,16 +159,69 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-func (m *Model) handleNodeDetailKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	if matchKey(msg, keys.Escape) || matchKey(msg, keys.Enter) {
-		m.viewMode = ViewOverview
-		return *m, nil
-	}
+// Placeholder handlers for new screens - will be implemented in E1-E7
+
+func (m *Model) handleNodesKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	return m.handleListNavigation(msg, len(m.nodes))
+}
+
+func (m *Model) handleDrainsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Count draining nodes
+	drainingCount := len(m.nodesByStage[types.StageDraining])
+	return m.handleListNavigation(msg, drainingCount)
+}
+
+func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Placeholder - pod count will come from pod watcher
+	return m.handleListNavigation(msg, 0)
+}
+
+func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	return m.handleListNavigation(msg, len(m.blockers))
+}
+
+func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	return m.handleListNavigation(msg, len(m.events))
+}
+
+func (m *Model) handleStatsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Stats screen has no list navigation
 	return *m, nil
 }
 
-func (m *Model) handleHelpKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	m.viewMode = ViewOverview
+// handleListNavigation provides common up/down/g/G navigation for list screens
+func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.Cmd) {
+	if matchKey(msg, keys.Up) {
+		if m.listIndex > 0 {
+			m.listIndex--
+		}
+		return *m, nil
+	}
+
+	if matchKey(msg, keys.Down) {
+		if m.listIndex < itemCount-1 {
+			m.listIndex++
+		}
+		return *m, nil
+	}
+
+	if matchKey(msg, keys.Top) {
+		m.listIndex = 0
+		return *m, nil
+	}
+
+	if matchKey(msg, keys.Bottom) {
+		if itemCount > 0 {
+			m.listIndex = itemCount - 1
+		}
+		return *m, nil
+	}
+
+	if matchKey(msg, keys.Enter) {
+		// Placeholder for item detail - screens will override
+		return *m, nil
+	}
+
 	return *m, nil
 }
 
