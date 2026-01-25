@@ -20,8 +20,10 @@ type keyMap struct {
 	Screen5 []string
 	Screen6 []string
 	// List navigation
-	Top    []string
-	Bottom []string
+	Top      []string
+	Bottom   []string
+	PageUp   []string
+	PageDown []string
 }
 
 var keys = keyMap{
@@ -40,8 +42,10 @@ var keys = keyMap{
 	Screen4: []string{"4"},
 	Screen5: []string{"5"},
 	Screen6: []string{"6"},
-	Top:     []string{"g"},
-	Bottom:  []string{"G"},
+	Top:      []string{"g"},
+	Bottom:   []string{"G"},
+	PageUp:   []string{"ctrl+u"},
+	PageDown: []string{"ctrl+d"},
 }
 
 func matchKey(msg tea.KeyMsg, bindings []string) bool {

@@ -40,8 +40,10 @@ type Config struct {
 	ServerVersion string
 	TargetVersion string
 	InitialNodes  []types.NodeState
+	InitialPods   []types.PodState
 	EventCh       <-chan types.Event
 	NodeStateCh   <-chan types.NodeState
+	PodStateCh    <-chan types.PodState
 }
 
 // Model is the TUI state
@@ -62,6 +64,7 @@ type Model struct {
 	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
 	nodesByStage map[types.NodeStage][]string
+	pods         map[string]types.PodState // key: namespace/name
 	events       []types.Event
 	migrations   []types.Migration
 	blockers     []types.Blocker
@@ -83,6 +86,7 @@ func New(cfg Config) Model {
 		overlay:      OverlayNone,
 		nodes:        make(map[string]types.NodeState),
 		nodesByStage: make(map[types.NodeStage][]string),
+		pods:         make(map[string]types.PodState),
 		events:       make([]types.Event, 0, maxEvents),
 		migrations:   make([]types.Migration, 0, maxMigrations),
 		blockers:     make([]types.Blocker, 0),
@@ -95,6 +99,11 @@ func New(cfg Config) Model {
 	}
 	m.rebuildNodesByStage()
 
+	// Load initial pods
+	for _, pod := range cfg.InitialPods {
+		m.pods[pod.Namespace+"/"+pod.Name] = pod
+	}
+
 	return m
 }
 
@@ -102,6 +111,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		waitForEvent(m.config.EventCh),
 		waitForNodeState(m.config.NodeStateCh),
+		waitForPodState(m.config.PodStateCh),
 		tick(),
 		spinnerTick(),
 	)
@@ -124,6 +134,16 @@ func waitForNodeState(ch <-chan types.NodeState) tea.Cmd {
 			return nil
 		}
 		return NodeUpdateMsg{Node: state}
+	}
+}
+
+func waitForPodState(ch <-chan types.PodState) tea.Cmd {
+	return func() tea.Msg {
+		state, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return PodUpdateMsg{Pod: state}
 	}
 }
 

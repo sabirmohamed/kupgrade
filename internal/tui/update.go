@@ -14,6 +14,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -22,6 +25,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NodeUpdateMsg:
 		m.handleNodeUpdate(msg.Node)
 		return m, waitForNodeState(m.config.NodeStateCh)
+
+	case PodUpdateMsg:
+		m.handlePodUpdate(msg.Pod)
+		return m, waitForPodState(m.config.PodStateCh)
 
 	case EventMsg:
 		m.handleEvent(msg.Event)
@@ -172,8 +179,33 @@ func (m *Model) handleDrainsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Placeholder - pod count will come from pod watcher
-	return m.handleListNavigation(msg, 0)
+	return m.handleListNavigation(msg, m.filteredPodCount())
+}
+
+// filteredPodCount returns count of pods on upgrading nodes (or all if none upgrading)
+func (m *Model) filteredPodCount() int {
+	upgradeNodes := make(map[string]bool)
+	for _, name := range m.nodesByStage[types.StageCordoned] {
+		upgradeNodes[name] = true
+	}
+	for _, name := range m.nodesByStage[types.StageDraining] {
+		upgradeNodes[name] = true
+	}
+	for _, name := range m.nodesByStage[types.StageUpgrading] {
+		upgradeNodes[name] = true
+	}
+
+	if len(upgradeNodes) == 0 {
+		return len(m.pods)
+	}
+
+	count := 0
+	for _, pod := range m.pods {
+		if upgradeNodes[pod.NodeName] {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -189,8 +221,14 @@ func (m *Model) handleStatsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// handleListNavigation provides common up/down/g/G navigation for list screens
+// handleListNavigation provides common up/down/g/G/pgup/pgdown navigation for list screens
 func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.Cmd) {
+	// Calculate page size (visible rows)
+	pageSize := m.height - 10
+	if pageSize < 5 {
+		pageSize = 5
+	}
+
 	if matchKey(msg, keys.Up) {
 		if m.listIndex > 0 {
 			m.listIndex--
@@ -201,6 +239,25 @@ func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.
 	if matchKey(msg, keys.Down) {
 		if m.listIndex < itemCount-1 {
 			m.listIndex++
+		}
+		return *m, nil
+	}
+
+	if matchKey(msg, keys.PageUp) {
+		m.listIndex -= pageSize
+		if m.listIndex < 0 {
+			m.listIndex = 0
+		}
+		return *m, nil
+	}
+
+	if matchKey(msg, keys.PageDown) {
+		m.listIndex += pageSize
+		if m.listIndex >= itemCount {
+			m.listIndex = itemCount - 1
+		}
+		if m.listIndex < 0 {
+			m.listIndex = 0
 		}
 		return *m, nil
 	}
@@ -235,6 +292,16 @@ func (m *Model) handleNodeUpdate(node types.NodeState) {
 	m.rebuildNodesByStage()
 }
 
+// handlePodUpdate stores pod state from watcher
+func (m *Model) handlePodUpdate(pod types.PodState) {
+	key := pod.Namespace + "/" + pod.Name
+	if pod.Deleted {
+		delete(m.pods, key)
+	} else {
+		m.pods[key] = pod
+	}
+}
+
 // handleEvent adds event to display list (no state changes)
 func (m *Model) handleEvent(e types.Event) {
 	m.eventCount++
@@ -260,4 +327,59 @@ func (m *Model) handleEvent(e types.Event) {
 
 func (m *Model) spinner() string {
 	return spinnerFrames[m.spinnerFrame]
+}
+
+// handleMouse handles mouse events for scrolling
+func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
+	// Only handle scroll on list screens
+	switch m.screen {
+	case ScreenNodes, ScreenDrains, ScreenPods, ScreenBlockers, ScreenEvents:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.listIndex > 0 {
+				m.listIndex--
+			}
+			return *m, nil
+		case tea.MouseButtonWheelDown:
+			itemCount := m.currentListCount()
+			if m.listIndex < itemCount-1 {
+				m.listIndex++
+			}
+			return *m, nil
+		}
+	case ScreenOverview:
+		// Scroll through nodes in selected stage
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.selectedNode > 0 {
+				m.selectedNode--
+			}
+			return *m, nil
+		case tea.MouseButtonWheelDown:
+			nodes := m.nodesInSelectedStage()
+			if m.selectedNode < len(nodes)-1 {
+				m.selectedNode++
+			}
+			return *m, nil
+		}
+	}
+	return *m, nil
+}
+
+// currentListCount returns the item count for the current list screen
+func (m *Model) currentListCount() int {
+	switch m.screen {
+	case ScreenNodes:
+		return len(m.nodes)
+	case ScreenDrains:
+		return len(m.nodesByStage[types.StageCordoned]) + len(m.nodesByStage[types.StageDraining])
+	case ScreenPods:
+		return m.filteredPodCount()
+	case ScreenBlockers:
+		return len(m.blockers)
+	case ScreenEvents:
+		return len(m.events)
+	default:
+		return 0
+	}
 }

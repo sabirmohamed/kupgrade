@@ -55,6 +55,9 @@ func (w *PodWatcher) onAdd(obj interface{}) {
 		return
 	}
 
+	// Emit pod state for TUI
+	w.emitter.EmitPodState(w.buildState(pod))
+
 	// Update pod count for node and refresh node state
 	if pod.Spec.NodeName != "" {
 		w.stages.UpdatePodCount(pod.Spec.NodeName, 1)
@@ -96,6 +99,9 @@ func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
 	if w.namespace != "" && newPod.Namespace != w.namespace {
 		return
 	}
+
+	// Emit pod state for TUI
+	w.emitter.EmitPodState(w.buildState(newPod))
 
 	// Check for eviction
 	if newPod.Status.Reason == "Evicted" && oldPod.Status.Reason != "Evicted" {
@@ -167,6 +173,14 @@ func (w *PodWatcher) onDelete(obj interface{}) {
 	// Track for potential migration
 	w.migrations.OnPodDelete(pod)
 
+	// Emit deleted pod state for TUI
+	w.emitter.EmitPodState(types.PodState{
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+		NodeName:  pod.Spec.NodeName,
+		Deleted:   true,
+	})
+
 	w.emitter.Emit(types.Event{
 		Type:      types.EventPodDeleted,
 		Severity:  types.SeverityInfo,
@@ -186,4 +200,151 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// buildState creates PodState from a k8s Pod
+func (w *PodWatcher) buildState(pod *corev1.Pod) types.PodState {
+	readyContainers, totalContainers := countReadyContainers(pod)
+	hasLiveness, hasReadiness := hasProbes(pod)
+	livenessOK, readinessOK := checkProbeStatus(pod)
+
+	return types.PodState{
+		Name:            pod.Name,
+		Namespace:       pod.Namespace,
+		NodeName:        pod.Spec.NodeName,
+		Ready:           isPodReady(pod),
+		ReadyContainers: readyContainers,
+		TotalContainers: totalContainers,
+		Phase:           computePodStatus(pod),
+		Restarts:        countRestarts(pod),
+		Age:             formatAge(pod.CreationTimestamp.Time),
+		HasLiveness:     hasLiveness,
+		HasReadiness:    hasReadiness,
+		LivenessOK:      livenessOK,
+		ReadinessOK:     readinessOK,
+		OwnerKind:       getOwnerKind(pod),
+		OwnerRef:        getOwnerRef(pod),
+	}
+}
+
+// computePodStatus returns detailed pod status like k9s (checking container states)
+func computePodStatus(pod *corev1.Pod) string {
+	// Check if pod is being deleted
+	if pod.DeletionTimestamp != nil {
+		return "Terminating"
+	}
+
+	// Check init container status first
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return "Init:" + cs.State.Waiting.Reason
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+			return "Init:Error"
+		}
+	}
+
+	// Check regular container statuses
+	for _, cs := range pod.Status.ContainerStatuses {
+		// Waiting states (CrashLoopBackOff, ImagePullBackOff, etc.)
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+		// Terminated states
+		if cs.State.Terminated != nil {
+			if cs.State.Terminated.Reason != "" {
+				return cs.State.Terminated.Reason
+			}
+			if cs.State.Terminated.ExitCode != 0 {
+				return "Error"
+			}
+		}
+	}
+
+	// Fall back to pod phase
+	return string(pod.Status.Phase)
+}
+
+// buildPodStates returns current state of all pods (for initial load)
+func (w *PodWatcher) buildPodStates() []types.PodState {
+	var states []types.PodState
+	for _, obj := range w.informer.GetStore().List() {
+		pod := obj.(*corev1.Pod)
+		if w.namespace != "" && pod.Namespace != w.namespace {
+			continue
+		}
+		states = append(states, w.buildState(pod))
+	}
+	return states
+}
+
+// countRestarts sums restart counts across all containers
+func countRestarts(pod *corev1.Pod) int {
+	restarts := 0
+	for _, cs := range pod.Status.ContainerStatuses {
+		restarts += int(cs.RestartCount)
+	}
+	return restarts
+}
+
+// countReadyContainers returns ready/total container counts
+func countReadyContainers(pod *corev1.Pod) (ready, total int) {
+	total = len(pod.Spec.Containers)
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Ready {
+			ready++
+		}
+	}
+	return ready, total
+}
+
+// hasProbes checks if pod has liveness/readiness probes configured
+func hasProbes(pod *corev1.Pod) (hasLiveness, hasReadiness bool) {
+	for _, c := range pod.Spec.Containers {
+		if c.LivenessProbe != nil {
+			hasLiveness = true
+		}
+		if c.ReadinessProbe != nil {
+			hasReadiness = true
+		}
+	}
+	return hasLiveness, hasReadiness
+}
+
+// checkProbeStatus checks liveness and readiness probe status
+func checkProbeStatus(pod *corev1.Pod) (livenessOK, readinessOK bool) {
+	livenessOK = true
+	readinessOK = true
+
+	for _, cs := range pod.Status.ContainerStatuses {
+		// If container is not ready, readiness probe is failing
+		if !cs.Ready {
+			readinessOK = false
+		}
+		// If container is in CrashLoopBackOff, liveness is failing
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+			livenessOK = false
+		}
+	}
+	return livenessOK, readinessOK
+}
+
+// getOwnerKind returns the kind of the pod's controller (Deployment, DaemonSet, etc.)
+func getOwnerKind(pod *corev1.Pod) string {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller {
+			return ref.Kind
+		}
+	}
+	return ""
+}
+
+// getOwnerRef returns the UID of the pod's controller
+func getOwnerRef(pod *corev1.Pod) string {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller {
+			return string(ref.UID)
+		}
+	}
+	return ""
 }

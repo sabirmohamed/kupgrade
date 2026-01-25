@@ -27,24 +27,55 @@ const (
 	panelMinWidth = 25
 )
 
-// Color palette
+// Color palette - Omarchy Tokyo Night theme
+// Source: https://github.com/omarchy/themes/tokyo-night
 var (
-	colorBg        = lipgloss.Color("#0a0a0f")
-	colorBgAlt     = lipgloss.Color("#12121a")
-	colorBorder    = lipgloss.Color("#1a1a2e")
-	colorText      = lipgloss.Color("#e0e0e0")
-	colorTextMuted = lipgloss.Color("#666666")
+	// Backgrounds (layered depth)
+	colorBg        = lipgloss.Color("#1a1b26") // Main background
+	colorBgAlt     = lipgloss.Color("#16161e") // Panel/sidebar background
+	colorBgHover   = lipgloss.Color("#1f2335") // Hover state
+	colorSelected  = lipgloss.Color("#414868") // Selected item background
+	colorBorder    = lipgloss.Color("#565f89") // Border/divider lines
+	colorBorderDim = lipgloss.Color("#32344a") // Subtle borders
 
-	colorReady     = lipgloss.Color("#888888")
-	colorCordoned  = lipgloss.Color("#FFAA00")
-	colorDraining  = lipgloss.Color("#FF6B35")
-	colorUpgrading = lipgloss.Color("#00D4FF")
-	colorComplete  = lipgloss.Color("#00FF9F")
+	// Text hierarchy
+	colorText      = lipgloss.Color("#a9b1d6") // Primary text
+	colorTextBold  = lipgloss.Color("#c0caf5") // Emphasized text
+	colorTextMuted = lipgloss.Color("#787c99") // Secondary text
+	colorTextDim   = lipgloss.Color("#565f89") // Tertiary/inactive text
 
-	colorError   = lipgloss.Color("#FF0055")
-	colorWarning = lipgloss.Color("#FFAA00")
-	colorSuccess = lipgloss.Color("#00FF9F")
-	colorInfo    = lipgloss.Color("#00D4FF")
+	// ANSI color slots (terminal-safe)
+	colorBlack   = lipgloss.Color("#32344a") // color0
+	colorRed     = lipgloss.Color("#f7768e") // color1
+	colorGreen   = lipgloss.Color("#9ece6a") // color2
+	colorYellow  = lipgloss.Color("#e0af68") // color3
+	colorBlue    = lipgloss.Color("#7aa2f7") // color4
+	colorMagenta = lipgloss.Color("#ad8ee6") // color5
+	colorCyan    = lipgloss.Color("#449dab") // color6
+	colorWhite   = lipgloss.Color("#787c99") // color7
+
+	// Bright variants
+	colorBrightRed     = lipgloss.Color("#ff7a93") // color9
+	colorBrightGreen   = lipgloss.Color("#b9f27c") // color10
+	colorBrightYellow  = lipgloss.Color("#ff9e64") // color11 (orange)
+	colorBrightBlue    = lipgloss.Color("#7da6ff") // color12
+	colorBrightMagenta = lipgloss.Color("#bb9af7") // color13
+	colorBrightCyan    = lipgloss.Color("#0db9d7") // color14
+	colorBrightWhite   = lipgloss.Color("#acb0d0") // color15
+
+	// Semantic: Stage colors
+	colorReady     = lipgloss.Color("#787c99") // Muted grey - waiting
+	colorCordoned  = lipgloss.Color("#e0af68") // Yellow - warning/paused
+	colorDraining  = lipgloss.Color("#ff9e64") // Orange - active attention
+	colorUpgrading = lipgloss.Color("#7dcfff") // Bright cyan - in progress
+	colorComplete  = lipgloss.Color("#9ece6a") // Green - done
+
+	// Semantic: Status colors
+	colorError   = lipgloss.Color("#f7768e") // Red - errors
+	colorWarning = lipgloss.Color("#e0af68") // Yellow - warnings
+	colorSuccess = lipgloss.Color("#9ece6a") // Green - success
+	colorInfo    = lipgloss.Color("#7aa2f7") // Blue - info
+	colorAccent  = lipgloss.Color("#7dcfff") // Cyan - highlights/active
 )
 
 // Header styles
@@ -98,7 +129,8 @@ var (
 
 	nodeCardSelected = nodeCardBase.Copy().
 				Border(lipgloss.DoubleBorder()).
-				BorderForeground(colorText)
+				BorderForeground(colorAccent).
+				Background(colorSelected)
 
 	nodeCardBlocked = nodeCardBase.Copy().
 			BorderForeground(colorError)
@@ -139,7 +171,7 @@ var (
 // Event styles
 var (
 	timestampStyle = lipgloss.NewStyle().
-			Foreground(colorTextMuted)
+			Foreground(colorTextDim)
 
 	eventTypeStyle = lipgloss.NewStyle().
 			Width(eventTypeWidth)
@@ -164,7 +196,7 @@ var (
 			Foreground(colorSuccess)
 
 	migrationStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#141414"))
+			Foreground(colorBrightCyan)
 )
 
 // Footer styles
@@ -194,6 +226,29 @@ var (
 				Bold(true).
 				Foreground(colorInfo).
 				MarginBottom(1)
+)
+
+// List/table styles
+var (
+	// Selected row in lists
+	selectedRowStyle = lipgloss.NewStyle().
+				Background(colorSelected).
+				Foreground(colorTextBold)
+
+	// Header row for tables
+	tableHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorTextMuted).
+				BorderBottom(true).
+				BorderForeground(colorBorderDim).
+				BorderStyle(lipgloss.NormalBorder())
+
+	// Alternating row backgrounds for readability
+	rowEvenStyle = lipgloss.NewStyle().
+			Background(colorBg)
+
+	rowOddStyle = lipgloss.NewStyle().
+			Background(colorBgAlt)
 )
 
 // Layout helpers

@@ -14,6 +14,7 @@ import (
 const (
 	eventBufferSize     = 100
 	nodeStateBufferSize = 50
+	podStateBufferSize  = 200
 )
 
 // Compile-time interface check
@@ -26,6 +27,7 @@ type Manager struct {
 
 	eventCh     chan types.Event
 	nodeStateCh chan types.NodeState
+	podStateCh  chan types.PodState
 	wg          sync.WaitGroup
 
 	nodeWatcher  *NodeWatcher
@@ -39,6 +41,7 @@ type Manager struct {
 func NewManager(factory informers.SharedInformerFactory, namespace string, targetVersion string) *Manager {
 	eventCh := make(chan types.Event, eventBufferSize)
 	nodeStateCh := make(chan types.NodeState, nodeStateBufferSize)
+	podStateCh := make(chan types.PodState, podStateBufferSize)
 
 	stages := NewStageComputer(targetVersion)
 	migrations := NewMigrationTracker()
@@ -48,6 +51,7 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 		namespace:   namespace,
 		eventCh:     eventCh,
 		nodeStateCh: nodeStateCh,
+		podStateCh:  podStateCh,
 		stages:      stages,
 		migrations:  migrations,
 	}
@@ -101,6 +105,11 @@ func (m *Manager) NodeStateUpdates() <-chan types.NodeState {
 	return m.nodeStateCh
 }
 
+// PodStateUpdates returns channel for pod state changes
+func (m *Manager) PodStateUpdates() <-chan types.PodState {
+	return m.podStateCh
+}
+
 // Emit sends an event (ring buffer semantics - drops oldest if full)
 func (m *Manager) Emit(event types.Event) {
 	select {
@@ -124,6 +133,19 @@ func (m *Manager) EmitNodeState(state types.NodeState) {
 		default:
 		}
 		m.nodeStateCh <- state
+	}
+}
+
+// EmitPodState sends a pod state update (ring buffer semantics)
+func (m *Manager) EmitPodState(state types.PodState) {
+	select {
+	case m.podStateCh <- state:
+	default:
+		select {
+		case <-m.podStateCh:
+		default:
+		}
+		m.podStateCh <- state
 	}
 }
 
@@ -159,6 +181,11 @@ func (m *Manager) HasSynced() bool {
 // InitialNodeStates returns current state of all nodes (for initial TUI load)
 func (m *Manager) InitialNodeStates() []types.NodeState {
 	return m.nodeWatcher.buildNodeStates()
+}
+
+// InitialPodStates returns current state of all pods (for initial TUI load)
+func (m *Manager) InitialPodStates() []types.PodState {
+	return m.podWatcher.buildPodStates()
 }
 
 // countPodsOnNode counts pods assigned to a node from the pod informer store

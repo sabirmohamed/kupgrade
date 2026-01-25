@@ -12,6 +12,11 @@ type NodeUpdateMsg struct {
 	Node types.NodeState
 }
 
+// PodUpdateMsg indicates pod state changed
+type PodUpdateMsg struct {
+	Pod types.PodState
+}
+
 // ErrorMsg indicates an error occurred
 type ErrorMsg struct {
 	Err         error

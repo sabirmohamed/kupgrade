@@ -16,13 +16,16 @@ type Watcher interface {
 	Start(ctx context.Context) error
 }
 
-// EventEmitter sends events and node state updates.
+// EventEmitter sends events, node state, and pod state updates.
 type EventEmitter interface {
 	// Emit sends an event. MUST NOT block.
 	Emit(event types.Event)
 
 	// EmitNodeState sends a node state update. MUST NOT block.
 	EmitNodeState(state types.NodeState)
+
+	// EmitPodState sends a pod state update. MUST NOT block.
+	EmitPodState(state types.PodState)
 
 	// RefreshNodeState triggers a node state refresh (e.g., when pods change).
 	RefreshNodeState(nodeName string)

@@ -318,34 +318,35 @@ func (m Model) severityIcon(s types.Severity) string {
 }
 
 func (m Model) renderFooter() string {
-	// Screen-specific hints come first
-	var hints []struct {
+	// Row 1: Screen-specific context hints
+	var row1Hints []struct {
 		key  string
 		desc string
 	}
 
 	switch m.screen {
 	case ScreenOverview:
-		hints = []struct {
+		row1Hints = []struct {
 			key  string
 			desc string
 		}{
 			{"←→", "stages"},
 			{"↑↓", "nodes"},
-			{"enter", "details"},
+			{"⏎", "details"},
 		}
 	default:
-		hints = []struct {
+		row1Hints = []struct {
 			key  string
 			desc string
 		}{
-			{"↑↓", "navigate"},
+			{"↑↓", "scroll"},
 			{"g/G", "top/bottom"},
+			{"⏎", "details"},
 		}
 	}
 
-	// Common screen navigation
-	screenHints := []struct {
+	// Row 2: Screen navigation
+	row2Hints := []struct {
 		key  string
 		desc string
 	}{
@@ -360,16 +361,21 @@ func (m Model) renderFooter() string {
 		{"q", "quit"},
 	}
 
-	var parts []string
-	for _, h := range hints {
-		parts = append(parts, footerKeyStyle.Render(h.key)+" "+footerDescStyle.Render(h.desc))
+	// Build row 1
+	var row1Parts []string
+	for _, h := range row1Hints {
+		row1Parts = append(row1Parts, footerKeyStyle.Render(h.key)+" "+footerDescStyle.Render(h.desc))
 	}
-	parts = append(parts, " ") // separator
-	for _, h := range screenHints {
-		parts = append(parts, footerKeyStyle.Render(h.key)+footerDescStyle.Render(h.desc))
-	}
+	row1 := strings.Join(row1Parts, "  ")
 
-	return footerStyle.Render(strings.Join(parts, " "))
+	// Build row 2
+	var row2Parts []string
+	for _, h := range row2Hints {
+		row2Parts = append(row2Parts, footerKeyStyle.Render(h.key)+" "+footerDescStyle.Render(h.desc))
+	}
+	row2 := strings.Join(row2Parts, "  ")
+
+	return footerStyle.Render(row1) + "\n" + footerStyle.Render(row2)
 }
 
 func (m Model) renderWithOverlay(overlay string) string {
@@ -604,11 +610,293 @@ func (m Model) renderPodsScreen() string {
 	var b strings.Builder
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
-	b.WriteString(footerDescStyle.Render("  Pod details will be implemented in E4"))
+
+	// Get nodes in upgrade pipeline (CORDONED, DRAINING, UPGRADING)
+	upgradeNodes := make(map[string]bool)
+	for _, name := range m.nodesByStage[types.StageCordoned] {
+		upgradeNodes[name] = true
+	}
+	for _, name := range m.nodesByStage[types.StageDraining] {
+		upgradeNodes[name] = true
+	}
+	for _, name := range m.nodesByStage[types.StageUpgrading] {
+		upgradeNodes[name] = true
+	}
+
+	// Collect pods on upgrade nodes (or all if no nodes upgrading)
+	var podList []types.PodState
+	showAll := len(upgradeNodes) == 0
+	for _, pod := range m.pods {
+		if showAll || upgradeNodes[pod.NodeName] {
+			podList = append(podList, pod)
+		}
+	}
+
+	// Sort by node first (group by node), then namespace, then name
+	sort.Slice(podList, func(i, j int) bool {
+		if podList[i].NodeName != podList[j].NodeName {
+			return podList[i].NodeName < podList[j].NodeName
+		}
+		if podList[i].Namespace != podList[j].Namespace {
+			return podList[i].Namespace < podList[j].Namespace
+		}
+		return podList[i].Name < podList[j].Name
+	})
+
+	if len(podList) == 0 {
+		if showAll {
+			b.WriteString(footerDescStyle.Render("  No pods found"))
+		} else {
+			b.WriteString(footerDescStyle.Render("  No pods on upgrading nodes"))
+			b.WriteString("\n")
+			b.WriteString(footerDescStyle.Render("  (showing pods on CORDONED/DRAINING/UPGRADING nodes only)"))
+		}
+	} else {
+		// Calculate responsive column widths based on terminal width
+		// Minimum: 120 chars, expand columns proportionally for wider terminals
+		availWidth := m.width - 4 // margins
+		if availWidth < 120 {
+			availWidth = 120
+		}
+
+		// Fixed columns: READY(5), STATUS(16), RS(3), PROBES(5), OWNER(12), AGE(5) = ~50
+		// Variable columns: NAMESPACE, NAME, NODE share remaining space
+		fixedWidth := 50
+		varWidth := availWidth - fixedWidth
+		nsWidth := varWidth * 15 / 100  // 15%
+		nameWidth := varWidth * 40 / 100 // 40%
+		nodeWidth := varWidth * 45 / 100 // 45%
+
+		// Minimum widths
+		if nsWidth < 12 {
+			nsWidth = 12
+		}
+		if nameWidth < 30 {
+			nameWidth = 30
+		}
+		if nodeWidth < 25 {
+			nodeWidth = 25
+		}
+
+		// Maximum widths (prevent excessive spacing on wide terminals)
+		if nsWidth > 15 {
+			nsWidth = 15
+		}
+		if nameWidth > 55 {
+			nameWidth = 55 // longest pod names are ~50-55 chars
+		}
+		if nodeWidth > 40 {
+			nodeWidth = 40
+		}
+
+		// Calculate visible rows
+		visibleRows := m.height - 10
+		if visibleRows < 5 {
+			visibleRows = 5
+		}
+
+		// Calculate scroll offset to keep cursor visible
+		scrollOffset := 0
+		if m.listIndex >= visibleRows {
+			scrollOffset = m.listIndex - visibleRows + 1
+		}
+
+		// Show count and scroll position
+		total := len(podList)
+		filterNote := ""
+		if !showAll {
+			filterNote = " (upgrading nodes)"
+		}
+		scrollInfo := ""
+		if total > visibleRows {
+			scrollInfo = fmt.Sprintf(" [%d-%d of %d]", scrollOffset+1, min(scrollOffset+visibleRows, total), total)
+		}
+		b.WriteString(fmt.Sprintf("  pods(%d)%s%s\n", total, filterNote, scrollInfo))
+
+		// Table header with separator
+		headerFmt := fmt.Sprintf("  %%-%ds %%-%ds %%5s %%-16s %%3s %%-5s %%-12s %%-%ds %%5s",
+			nsWidth, nameWidth, nodeWidth)
+		header := fmt.Sprintf(headerFmt,
+			"NAMESPACE", "NAME", "READY", "STATUS", "RS", "PROBE", "OWNER", "NODE", "AGE")
+		b.WriteString(panelTitleStyle.Render(header))
+		b.WriteString("\n")
+
+		// Separator line
+		sepLen := nsWidth + nameWidth + nodeWidth + 50
+		if sepLen > m.width-2 {
+			sepLen = m.width - 2
+		}
+		b.WriteString(footerDescStyle.Render("  " + strings.Repeat("─", sepLen)))
+		b.WriteString("\n")
+
+		endIdx := scrollOffset + visibleRows
+		if endIdx > len(podList) {
+			endIdx = len(podList)
+		}
+
+		prevNode := ""
+		for i := scrollOffset; i < endIdx; i++ {
+			pod := podList[i]
+
+			// Add visual separator between nodes (group by node)
+			if pod.NodeName != prevNode && prevNode != "" && i > scrollOffset {
+				b.WriteString(footerDescStyle.Render("  " + strings.Repeat("·", sepLen/2)))
+				b.WriteString("\n")
+			}
+			prevNode = pod.NodeName
+
+			cursor := "  "
+			if i == m.listIndex {
+				cursor = "► "
+			}
+
+			// Namespace
+			namespace := truncateString(pod.Namespace, nsWidth)
+
+			// Pod name
+			name := truncateString(pod.Name, nameWidth)
+
+			// Ready containers (1/1 format)
+			readyStr := fmt.Sprintf("%d/%d", pod.ReadyContainers, pod.TotalContainers)
+			readyStyle := successStyle
+			if pod.ReadyContainers < pod.TotalContainers {
+				readyStyle = warningStyle
+			}
+			if pod.ReadyContainers == 0 && pod.TotalContainers > 0 {
+				readyStyle = errorStyle
+			}
+
+			// Status with color (16 chars to fit CrashLoopBackOff)
+			status := truncateString(pod.Phase, 16)
+			statusStyle := successStyle
+			switch {
+			case pod.Phase == "Running":
+				statusStyle = successStyle
+			case pod.Phase == "Pending":
+				statusStyle = warningStyle
+			case pod.Phase == "Succeeded" || pod.Phase == "Completed":
+				statusStyle = footerDescStyle
+			case pod.Phase == "CrashLoopBackOff" || pod.Phase == "ImagePullBackOff" ||
+				pod.Phase == "ErrImagePull" || pod.Phase == "Error" ||
+				pod.Phase == "Failed" || pod.Phase == "Unknown" ||
+				pod.Phase == "Terminating" || pod.Phase == "OOMKilled" ||
+				strings.HasPrefix(pod.Phase, "Init:"):
+				statusStyle = errorStyle
+			}
+
+			// Restarts (compact)
+			restartStr := fmt.Sprintf("%d", pod.Restarts)
+			restartStyle := footerDescStyle
+			if pod.Restarts > 5 {
+				restartStyle = errorStyle
+			} else if pod.Restarts > 0 {
+				restartStyle = warningStyle
+			}
+
+			// Probes - R✓ L✓ format (Readiness first, then Liveness)
+			// · = not configured, ✓ = passing (green), ✗ = failing (red)
+			var rProbe, lProbe string
+			var rStyle, lStyle lipgloss.Style
+
+			// Readiness probe
+			if pod.HasReadiness {
+				if pod.ReadinessOK {
+					rProbe = "R✓"
+					rStyle = successStyle
+				} else {
+					rProbe = "R✗"
+					rStyle = errorStyle
+				}
+			} else {
+				rProbe = "··"
+				rStyle = footerDescStyle
+			}
+
+			// Liveness probe
+			if pod.HasLiveness {
+				if pod.LivenessOK {
+					lProbe = "L✓"
+					lStyle = successStyle
+				} else {
+					lProbe = "L✗"
+					lStyle = errorStyle
+				}
+			} else {
+				lProbe = "··"
+				lStyle = footerDescStyle
+			}
+
+			// Owner kind (important for upgrades - DaemonSet can't evict)
+			owner := truncateString(pod.OwnerKind, 12)
+			if owner == "" {
+				owner = "<none>"
+			}
+			ownerStyle := footerDescStyle
+			if pod.OwnerKind == "DaemonSet" {
+				ownerStyle = warningStyle // DaemonSets can't be evicted
+			}
+
+			// Node name
+			nodeName := truncateString(pod.NodeName, nodeWidth)
+			if nodeName == "" {
+				nodeName = "<pending>"
+			}
+
+			// Build line with proper formatting
+			lineFmt := fmt.Sprintf("%%s%%-%ds %%-%ds ", nsWidth, nameWidth)
+			line := fmt.Sprintf(lineFmt, cursor, namespace, name)
+			if i == m.listIndex {
+				b.WriteString(nodeNameStyle.Render(line))
+			} else {
+				b.WriteString(line)
+			}
+
+			b.WriteString(readyStyle.Render(fmt.Sprintf("%5s ", readyStr)))
+			b.WriteString(statusStyle.Render(fmt.Sprintf("%-16s ", status)))
+			b.WriteString(restartStyle.Render(fmt.Sprintf("%3s ", restartStr)))
+			b.WriteString(rStyle.Render(rProbe))
+			b.WriteString(" ")
+			b.WriteString(lStyle.Render(lProbe))
+			b.WriteString(" ")
+			b.WriteString(ownerStyle.Render(fmt.Sprintf("%-12s ", owner)))
+			b.WriteString(footerDescStyle.Render(fmt.Sprintf("%-*s ", nodeWidth, nodeName)))
+			b.WriteString(footerDescStyle.Render(fmt.Sprintf("%5s", pod.Age)))
+			b.WriteString("\n")
+		}
+
+		// Scroll indicator at bottom if more items
+		if total > visibleRows {
+			b.WriteString("\n")
+			if scrollOffset > 0 {
+				b.WriteString(footerDescStyle.Render("  ↑ more above"))
+			}
+			if endIdx < total {
+				if scrollOffset > 0 {
+					b.WriteString(footerDescStyle.Render("  |  "))
+				} else {
+					b.WriteString(footerDescStyle.Render("  "))
+				}
+				b.WriteString(footerDescStyle.Render("↓ more below"))
+			}
+		}
+	}
+
 	b.WriteString("\n\n")
-	b.WriteString(m.renderFooter())
+	b.WriteString(m.renderPodsFooter())
 
 	return m.placeContent(b.String())
+}
+
+func (m Model) renderPodsFooter() string {
+	// Use the common two-row footer
+	return m.renderFooter()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (m Model) renderBlockersScreen() string {

@@ -56,11 +56,13 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		ServerVersion: serverVersion,
 		TargetVersion: detectedTarget,
 		InitialNodes:  manager.InitialNodeStates(),
+		InitialPods:   manager.InitialPodStates(),
 		EventCh:       manager.Events(),
 		NodeStateCh:   manager.NodeStateUpdates(),
+		PodStateCh:    manager.PodStateUpdates(),
 	})
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("cli: TUI error: %w", err)
 	}
