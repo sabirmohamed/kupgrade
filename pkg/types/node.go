@@ -26,6 +26,11 @@ type NodeState struct {
 	DrainProgress   int
 	Blocked         bool
 	BlockerReason   string
+
+	// Enhanced node details for NODES screen
+	Conditions []string // Non-ready conditions (MemoryPressure, DiskPressure, etc.)
+	Taints     []string // Active taints (NoSchedule, NoExecute, etc.)
+	Age        string   // Human-readable age (e.g., "5d", "2h")
 }
 
 // AllStages returns all stages in pipeline order

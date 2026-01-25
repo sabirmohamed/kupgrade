@@ -436,8 +436,8 @@ func (m Model) renderNodesScreen() string {
 	b.WriteString("\n\n")
 
 	// Calculate name column width based on terminal width
-	// Reserve space for: cursor(2) + version(12) + stage(12) + age(8) + conditions(12) + taints(12) + gaps(6)
-	fixedWidth := 2 + 12 + 12 + 8 + 12 + 12 + 6
+	// Reserve space for: cursor(2) + version(12) + stage(12) + age(8) + conditions(20) + taints(15) + gaps(6)
+	fixedWidth := 2 + 12 + 12 + 8 + 20 + 15 + 6
 	nameWidth := m.width - fixedWidth
 	if nameWidth < 20 {
 		nameWidth = 20
@@ -447,7 +447,7 @@ func (m Model) renderNodesScreen() string {
 	}
 
 	// Table header
-	header := fmt.Sprintf("  %-*s %-12s %-12s %-8s %-12s %-12s",
+	header := fmt.Sprintf("  %-*s %-12s %-12s %-8s %-20s %-15s",
 		nameWidth, "NAME", "VERSION", "STAGE", "AGE", "CONDITIONS", "TAINTS")
 	b.WriteString(panelTitleStyle.Render(header))
 	b.WriteString("\n")
@@ -461,14 +461,26 @@ func (m Model) renderNodesScreen() string {
 			cursor = "► "
 		}
 
+		// Format conditions - show "Ready" if no issues, otherwise list problems
 		conditions := "Ready"
 		if !node.Ready {
 			conditions = "NotReady"
+		} else if len(node.Conditions) > 0 {
+			conditions = strings.Join(node.Conditions, ",")
 		}
 
+		// Format taints - show "-" if none, otherwise list effects
 		taints := "-"
-		if !node.Schedulable {
+		if len(node.Taints) > 0 {
+			taints = strings.Join(node.Taints, ",")
+		} else if !node.Schedulable {
 			taints = "NoSchedule"
+		}
+
+		// Format age - use actual age from node if available
+		age := node.Age
+		if age == "" {
+			age = "-"
 		}
 
 		// Show full name if it fits, otherwise truncate
@@ -477,15 +489,15 @@ func (m Model) renderNodesScreen() string {
 			displayName = truncateString(name, nameWidth)
 		}
 
-		line := fmt.Sprintf("%s%-*s %-12s %-12s %-8s %-12s %-12s",
+		line := fmt.Sprintf("%s%-*s %-12s %-12s %-8s %-20s %-15s",
 			cursor,
 			nameWidth,
 			displayName,
 			node.Version,
 			node.Stage,
-			"-", // TODO: time in stage
-			conditions,
-			taints,
+			age,
+			truncateString(conditions, 20),
+			truncateString(taints, 15),
 		)
 
 		if i == m.listIndex {
