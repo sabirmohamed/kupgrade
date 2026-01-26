@@ -142,6 +142,12 @@ var (
 			Bold(true).
 			Foreground(colorText)
 
+	// Selected row in node list - subtle rounded box
+	nodeListSelectedStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(colorBorder).
+				Padding(0, 1)
+
 	nodePodStyle = lipgloss.NewStyle().
 			Foreground(colorTextMuted)
 
@@ -158,6 +164,12 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
 			Padding(0, 1)
+
+	// Left border only for blockers section
+	blockerPanelStyle = lipgloss.NewStyle().
+				Border(lipgloss.Border{Left: "│"}).
+				BorderForeground(colorWarning).
+				PaddingLeft(1)
 
 	panelTitleStyle = lipgloss.NewStyle().
 			Bold(true).

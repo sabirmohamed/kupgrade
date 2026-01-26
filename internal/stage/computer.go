@@ -27,7 +27,6 @@ func New(targetVersion string) *Computer {
 // ComputeStage returns current stage for a node
 func (c *Computer) ComputeStage(node *corev1.Node) types.NodeStage {
 	c.mu.RLock()
-	podCount := c.nodePodCounts[node.Name]
 	target := c.targetVersion
 	lowest := c.lowestVersion
 	c.mu.RUnlock()
@@ -44,9 +43,8 @@ func (c *Computer) ComputeStage(node *corev1.Node) types.NodeStage {
 		return types.StageComplete
 	case !ready:
 		return types.StageUpgrading
-	case !schedulable && podCount == 0:
-		return types.StageDraining
 	case !schedulable:
+		// NodeWatcher will correct to DRAINING when pods are actually evicted
 		return types.StageCordoned
 	default:
 		return types.StageReady
@@ -89,6 +87,13 @@ func (c *Computer) TargetVersion() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.targetVersion
+}
+
+// LowestVersion returns the lowest version seen across nodes
+func (c *Computer) LowestVersion() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lowestVersion
 }
 
 // PodCount returns the pod count for a node

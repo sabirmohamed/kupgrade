@@ -128,11 +128,12 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	stages := types.AllStages()
+	allNodes := m.getSortedNodeList()
 
+	// Left/Right: change selected stage in pipeline header
 	if matchKey(msg, keys.Left) {
 		if m.selectedStage > 0 {
 			m.selectedStage--
-			m.selectedNode = 0
 		}
 		return *m, nil
 	}
@@ -140,29 +141,32 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if matchKey(msg, keys.Right) {
 		if m.selectedStage < len(stages)-1 {
 			m.selectedStage++
-			m.selectedNode = 0
 		}
 		return *m, nil
 	}
 
+	// Up/Down: navigate unified node list
 	if matchKey(msg, keys.Up) {
-		if m.selectedNode > 0 {
-			m.selectedNode--
+		if m.listIndex > 0 {
+			m.listIndex--
 		}
 		return *m, nil
 	}
 
 	if matchKey(msg, keys.Down) {
-		nodes := m.nodesInSelectedStage()
-		if m.selectedNode < len(nodes)-1 {
-			m.selectedNode++
+		if m.listIndex < len(allNodes)-1 {
+			m.listIndex++
 		}
 		return *m, nil
 	}
 
+	// Enter: show node detail overlay
 	if matchKey(msg, keys.Enter) {
-		if _, ok := m.selectedNodeState(); ok {
-			m.overlay = OverlayNodeDetail
+		if m.listIndex < len(allNodes) {
+			nodeName := allNodes[m.listIndex]
+			if _, ok := m.nodes[nodeName]; ok {
+				m.overlay = OverlayNodeDetail
+			}
 		}
 		return *m, nil
 	}

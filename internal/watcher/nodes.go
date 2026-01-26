@@ -13,19 +13,23 @@ import (
 
 // NodeWatcher watches node resources for upgrade-relevant changes
 type NodeWatcher struct {
-	informer   cache.SharedIndexInformer
-	emitter    EventEmitter
-	stages     StageComputer
-	podCounter func(nodeName string) int
+	informer        cache.SharedIndexInformer
+	emitter         EventEmitter
+	stages          StageComputer
+	podCounter      func(nodeName string) int
+	drainStartTimes map[string]time.Time    // Track when each node started draining
+	initialPodCount map[string]int          // Track pod count when drain started
 }
 
 // NewNodeWatcher creates a new node watcher
 func NewNodeWatcher(factory informers.SharedInformerFactory, emitter EventEmitter, stages StageComputer, podCounter func(string) int) *NodeWatcher {
 	return &NodeWatcher{
-		informer:   factory.Core().V1().Nodes().Informer(),
-		emitter:    emitter,
-		stages:     stages,
-		podCounter: podCounter,
+		informer:        factory.Core().V1().Nodes().Informer(),
+		emitter:         emitter,
+		stages:          stages,
+		podCounter:      podCounter,
+		drainStartTimes: make(map[string]time.Time),
+		initialPodCount: make(map[string]int),
 	}
 }
 
@@ -165,16 +169,60 @@ func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
 		podCount = w.podCounter(node.Name)
 	}
 
+	stage := w.stages.ComputeStage(node)
+
+	// Track drain timing and correct stage
+	var drainStart time.Time
+	var initialPods int
+	var drainProgress int
+
+	if stage == types.StageDraining || stage == types.StageCordoned {
+		// Check if we're already tracking this drain
+		if start, ok := w.drainStartTimes[node.Name]; ok {
+			drainStart = start
+			initialPods = w.initialPodCount[node.Name]
+
+			// Correct stage based on actual drain activity:
+			// If pods have been evicted (current < initial), we're DRAINING
+			if podCount < initialPods {
+				stage = types.StageDraining
+			}
+		} else {
+			// First time seeing this node cordoned - record initial state
+			drainStart = time.Now()
+			initialPods = podCount
+			w.drainStartTimes[node.Name] = drainStart
+			w.initialPodCount[node.Name] = initialPods
+			// Keep stage as CORDONED until pods start decreasing
+		}
+
+		// Calculate drain progress
+		if initialPods > 0 {
+			evicted := initialPods - podCount
+			if evicted < 0 {
+				evicted = 0
+			}
+			drainProgress = (evicted * 100) / initialPods
+		}
+	} else {
+		// Node not cordoned - clear tracking if exists
+		delete(w.drainStartTimes, node.Name)
+		delete(w.initialPodCount, node.Name)
+	}
+
 	return types.NodeState{
-		Name:        node.Name,
-		Stage:       w.stages.ComputeStage(node),
-		Version:     node.Status.NodeInfo.KubeletVersion,
-		Ready:       isNodeReady(node),
-		Schedulable: !node.Spec.Unschedulable,
-		PodCount:    podCount,
-		Conditions:  extractConditions(node),
-		Taints:      extractTaints(node),
-		Age:         formatAge(node.CreationTimestamp.Time),
+		Name:            node.Name,
+		Stage:           stage,
+		Version:         node.Status.NodeInfo.KubeletVersion,
+		Ready:           isNodeReady(node),
+		Schedulable:     !node.Spec.Unschedulable,
+		PodCount:        podCount,
+		Conditions:      extractConditions(node),
+		Taints:          extractTaints(node),
+		Age:             formatAge(node.CreationTimestamp.Time),
+		DrainStartTime:  drainStart,
+		InitialPodCount: initialPods,
+		DrainProgress:   drainProgress,
 	}
 }
 

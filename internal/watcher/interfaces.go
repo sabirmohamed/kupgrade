@@ -48,6 +48,9 @@ type StageComputer interface {
 	// TargetVersion returns the current target version.
 	TargetVersion() string
 
+	// LowestVersion returns the lowest version seen across nodes.
+	LowestVersion() string
+
 	// PodCount returns the pod count for a node.
 	PodCount(nodeName string) int
 }

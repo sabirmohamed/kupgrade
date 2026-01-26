@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -217,11 +218,12 @@ func (m *Model) nodesInSelectedStage() []string {
 }
 
 func (m *Model) selectedNodeName() string {
-	nodes := m.nodesInSelectedStage()
-	if m.selectedNode < 0 || m.selectedNode >= len(nodes) {
+	// New unified list approach using listIndex
+	allNodes := m.getSortedNodeList()
+	if m.listIndex < 0 || m.listIndex >= len(allNodes) {
 		return ""
 	}
-	return nodes[m.selectedNode]
+	return allNodes[m.listIndex]
 }
 
 func (m *Model) selectedNodeState() (types.NodeState, bool) {
@@ -231,6 +233,30 @@ func (m *Model) selectedNodeState() (types.NodeState, bool) {
 	}
 	state, ok := m.nodes[name]
 	return state, ok
+}
+
+// getSortedNodeList returns nodes sorted by stage priority (action-needed first), then name
+func (m *Model) getSortedNodeList() []string {
+	var allNodes []string
+
+	// Priority order: DRAINING, CORDONED, UPGRADING, READY, COMPLETE
+	stagePriority := []types.NodeStage{
+		types.StageDraining,
+		types.StageCordoned,
+		types.StageUpgrading,
+		types.StageReady,
+		types.StageComplete,
+	}
+
+	for _, stage := range stagePriority {
+		nodes := m.nodesByStage[stage]
+		sorted := make([]string, len(nodes))
+		copy(sorted, nodes)
+		sort.Strings(sorted)
+		allNodes = append(allNodes, sorted...)
+	}
+
+	return allNodes
 }
 
 func (m *Model) rebuildNodesByStage() {

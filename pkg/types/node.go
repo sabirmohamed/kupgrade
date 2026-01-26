@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // NodeStage represents the upgrade stage of a node
 type NodeStage string
 
@@ -26,6 +28,8 @@ type NodeState struct {
 	DrainProgress   int
 	Blocked         bool
 	BlockerReason   string
+	DrainStartTime  time.Time // When drain started (for elapsed display)
+	WaitingPods     []string  // Pods that can't be evicted (PDB blocked)
 
 	// Enhanced node details for NODES screen
 	Conditions []string // Non-ready conditions (MemoryPressure, DiskPressure, etc.)

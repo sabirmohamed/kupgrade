@@ -46,14 +46,21 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cli: %w", err)
 	}
 
-	detectedTarget := manager.StageComputer().TargetVersion()
+	stageComputer := manager.StageComputer()
+	detectedTarget := stageComputer.TargetVersion()
+	lowestVersion := stageComputer.LowestVersion()
+
+	// Use lowest node version as "from", highest as "to"
+	if lowestVersion == "" {
+		lowestVersion = serverVersion
+	}
 	if detectedTarget == "" {
 		detectedTarget = serverVersion
 	}
 
 	model := tui.New(tui.Config{
 		Context:         client.Context,
-		ServerVersion:   serverVersion,
+		ServerVersion:   lowestVersion,
 		TargetVersion:   detectedTarget,
 		InitialNodes:    manager.InitialNodeStates(),
 		InitialPods:     manager.InitialPodStates(),
@@ -64,7 +71,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		BlockerCh:       manager.BlockerUpdates(),
 	})
 
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("cli: TUI error: %w", err)
 	}

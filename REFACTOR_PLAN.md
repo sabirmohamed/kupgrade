@@ -678,3 +678,227 @@ Benefits:
 - Consistent behavior across Charm apps
 - Less code to maintain
 - Better keyboard handling
+
+---
+
+## Overview Screen UX Refactor (2025-01-25)
+
+### Design Principle
+
+> Design for the anxious on-call engineer at 2am who needs to know "is this stuck and why" in under 2 seconds.
+
+### Current Problems
+
+1. **Empty columns waste 80% of screen** - Four "(empty)" boxes showing nothing
+2. **Node boxes too tall** - 3 lines per node when 1 would suffice
+3. **Horizontal layout doesn't scale** - Eye movement across 5 columns
+4. **Blockers buried** - Most critical info competing with useless panels
+5. **Information by structure, not priority** - Organized by stages, not user questions
+
+### User Questions (In Priority Order)
+
+1. Is anything broken/blocked? → **Blockers at top**
+2. What's the overall progress? → **Pipeline summary**
+3. What's actively happening? → **Drain detail (when relevant)**
+4. What are the details? → **Node list, events**
+
+---
+
+### Target States
+
+#### Scenario 1: Idle State (Pre-Upgrade)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ ★ kupgrade  testbed-aks  v1.32.1  ─────────────────────── 0%      22:58:42      │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│    READY    →    CORDONED    →    DRAINING    →    UPGRADING    →    COMPLETE   │
+│      5              0               0                0                 0        │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ⚠ BLOCKERS (2)                                                                  │
+│ PDB default/critical-service-pdb    maxUnavailable=0     → 0 evictions allowed  │
+│ PDB default/test-app-pdb-strict     minAvailable=100%    → 0 evictions allowed  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ NODES: READY (5)                                              ↑↓ navigate       │
+│ ► aks-stdpool-84629564-vms1      10 pods   v1.32.1                              │
+│   aks-stdpool-84629564-vms2      11 pods   v1.32.1                              │
+│   aks-stdpool-84629564-vms3      10 pods   v1.32.1                              │
+│   ntpool-84629564-vmss000000     21 pods   v1.32.1                              │
+│   ntpool-84629564-vmss000001     19 pods   v1.32.1                              │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ● EVENTS (LATEST)                                                               │
+│ 22:53:42  ● Pod default/probe-test-liveness-fail Ready on vmss000001            │
+│ 22:49:28  ● 5 nodes discovered                                                  │
+│ 22:49:28  ● 2 blocking PDBs detected                                            │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ 0 overview  1 nodes  2 drains  3 pods  4 blockers  5 events  ? help  q quit     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Scenario 2: Active Upgrade (Mid-Drain)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ ★ kupgrade  testbed-aks  v1.32.1 → v1.33.0  ████████───── 40%     23:12:07      │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│    READY    →    CORDONED    →    DRAINING    →    UPGRADING    →    COMPLETE   │
+│      2              1               1                0                 1        │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ⚠ BLOCKERS (1) - BLOCKING DRAIN ON VMS2                                         │
+│ PDB default/critical-service-pdb    maxUnavailable=0     → cannot evict nginx-x │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ◐ DRAINING: AKS-STDPOOL-84629564-VMS2                                           │
+│ ████████████░░░░░░░░  12/21 pods evicted    Elapsed: 4m 23s                     │
+│ Waiting on: nginx-deployment-7fb96c846b-xxx  app-backend-5d4f8c9b7-yyy          │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ NODES (5)                                                  ↑↓ navigate          │
+│   aks-stdpool-84629564-vms1      10 pods   v1.32.1    READY                     │
+│ ► aks-stdpool-84629564-vms2       9 pods   v1.32.1    DRAINING                  │
+│   aks-stdpool-84629564-vms3      14 pods   v1.32.1    CORDONED                  │
+│   ntpool-84629564-vmss000000     21 pods   v1.33.0    COMPLETE                  │
+│   ntpool-84629564-vmss000001     19 pods   v1.32.1    READY                     │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ● EVENTS (LATEST)                                                               │
+│ 23:12:05  ▲ Eviction blocked by PDB critical-service-pdb                        │
+│ 23:11:42  ● Pod app-frontend-xxx migrated to vms1                               │
+│ 23:11:38  ● Node vms2 drain started                                             │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ 0 overview  1 nodes  2 drains  3 pods  4 blockers  5 events  ? help  q quit     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Scenario 3: Upgrade Complete
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ ★ kupgrade  testbed-aks  v1.33.0  ████████████████████ 100%       23:47:19      │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│    READY    →    CORDONED    →    DRAINING    →    UPGRADING    →    COMPLETE   │
+│      0              0               0                0                 5        │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ✓ ALL NODES UPGRADED                                       Duration: 48m 37s    │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ NODES (5)                                                                       │
+│   aks-stdpool-84629564-vms1      12 pods   v1.33.0    ✓                         │
+│   aks-stdpool-84629564-vms2      11 pods   v1.33.0    ✓                         │
+│   aks-stdpool-84629564-vms3      10 pods   v1.33.0    ✓                         │
+│   ntpool-84629564-vmss000000     21 pods   v1.33.0    ✓                         │
+│   ntpool-84629564-vmss000001     17 pods   v1.33.0    ✓                         │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ ● EVENTS (LATEST)                                                               │
+│ 23:47:19  ★ Upgrade complete! All 5 nodes now running v1.33.0                   │
+│ 23:47:15  ● Node vms1 upgraded to v1.33.0                                       │
+│ 23:42:08  ● Node vmss000001 upgraded to v1.33.0                                 │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│ 0 overview  1 nodes  2 drains  3 pods  4 blockers  5 events  ? help  q quit     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Implementation Phases
+
+#### Phase 1: Layout Foundation ✅ COMPLETE
+
+**Goal**: Replace column layout with vertical flow
+
+| Task | File | Effort | Status |
+|------|------|--------|--------|
+| Compact pipeline header (counts + arrows) | `view.go` | 30 min | ✅ `renderCompactHeader()` + `renderPipelineRow()` |
+| Blockers section (full width, top priority) | `view.go` | 30 min | ✅ `renderBlockersSection()` |
+| Unified node list (stage as column) | `view.go` | 45 min | ✅ `renderNodeList()` |
+| Simplified events panel | `view.go` | 20 min | ✅ `renderEventsSection()` |
+| Remove old column rendering | `view.go` | 15 min | ⏳ Kept as `renderNodeColumns()` per rollback plan |
+
+**Navigation changes (implemented):**
+- ←/→ arrows: Highlight stage in pipeline header (nodes always visible)
+- ↑/↓ arrows: Navigate unified node list via `listIndex`
+- Enter: Show node detail overlay
+
+**Code fixes (2025-01-26):**
+- Consolidated duplicate `getSortedNodesFor*()` into shared `getSortedNodeList()` in model.go
+- Fixed `selectedNodeState()` to use `listIndex` instead of old `selectedNode`
+- Removed unused `sort` import from update.go
+
+#### Phase 2: Drain Progress 🟡 PARTIAL
+
+**Goal**: Show real-time drain status
+
+| Task | File | Effort | Status |
+|------|------|--------|--------|
+| Track pods evicted per node | `watcher/pods.go` | 45 min | TODO |
+| Track drain start time | `watcher/nodes.go` | 30 min | ✅ Field added to NodeState |
+| Identify waiting pods (blocked by PDB) | `watcher/pdbs.go` | 1 hr | TODO |
+| Render drain progress panel | `view.go` | 45 min | ✅ `renderDrainProgressSection()` |
+
+**New data fields (added to NodeState):**
+- ✅ `NodeState.DrainStartTime time.Time`
+- ✅ `NodeState.WaitingPods []string`
+- TODO: `NodeState.PodsEvicted int` (currently calculated from InitialPodCount - PodCount)
+
+#### Phase 3: Contextual Intelligence (Future)
+
+**Goal**: Smart, contextual information display
+
+| Task | Effort | Status |
+|------|--------|--------|
+| Detect upgrade in progress (version change) | 30 min | ✅ Done in header |
+| Version transition in header (v1.32.1 → v1.33.0) | 20 min | ✅ Done in `renderCompactHeader()` |
+| Success state detection | 30 min | TODO |
+| Duration tracking | 30 min | TODO |
+| Contextual blocker messages ("BLOCKING DRAIN ON X") | 45 min | TODO |
+
+---
+
+### Files to Modify
+
+#### Phase 1
+- `internal/tui/view.go` - Main rendering changes
+- `internal/tui/model.go` - May need state adjustments
+- `internal/tui/update.go` - Navigation logic if changed
+
+#### Phase 2
+- `internal/watcher/nodes.go` - Drain tracking
+- `internal/watcher/pods.go` - Eviction counting
+- `pkg/types/node.go` - New fields
+- `internal/tui/view.go` - Drain panel
+
+#### Phase 3
+- `internal/watcher/manager.go` - Upgrade detection
+- `internal/tui/model.go` - Upgrade state
+- `internal/tui/view.go` - Conditional rendering
+
+---
+
+### Success Criteria
+
+1. **2-second test**: Can identify "stuck and why" in under 2 seconds
+2. **Terminal size**: Works well in 80x24 minimum
+3. **Scale test**: Handles 50+ nodes without breaking layout
+4. **Empty state**: No wasted space when stages are empty
+5. **Information hierarchy**: Most critical info at top
+
+---
+
+### Rollback Plan
+
+Keep current `renderOverviewScreen()` as `renderOverviewScreenLegacy()` until new layout is validated.
+
+---
+
+### Open Questions
+
+1. ~~Should ←/→ filter the node list by stage, or show all nodes always?~~ **RESOLVED**: Show all nodes always, ←/→ highlights stage in pipeline
+2. Should we add a "compact mode" toggle for very large clusters?
+3. Do we need keyboard shortcut to jump to draining node?
+
+---
+
+### Future Ideas (Brainstorm)
+
+**PDB → Node Linking**
+- Currently: Blockers and draining nodes shown side-by-side (user infers connection)
+- Future: Explicitly link "PDB X is blocking Node Y"
+- Requires: Match PDB label selectors to pods on draining nodes
+- Complexity: Medium - need to join PDB selector → Pod labels → Pod nodeName
+- Note: Kubernetes doesn't emit events for PDB blocks (only 429 API errors)

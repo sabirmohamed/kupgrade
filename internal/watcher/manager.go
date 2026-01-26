@@ -221,16 +221,27 @@ func (m *Manager) InitialBlockers() []types.Blocker {
 	return m.pdbWatcher.buildBlockers()
 }
 
-// countPodsOnNode counts pods assigned to a node from the pod informer store
+// countPodsOnNode counts evictable pods on a node (excludes DaemonSets)
+// DaemonSet pods are ignored by `kubectl drain --ignore-daemonsets`
 func (m *Manager) countPodsOnNode(nodeName string) int {
 	count := 0
 	for _, obj := range m.podWatcher.informer.GetStore().List() {
 		pod := obj.(*corev1.Pod)
-		if pod.Spec.NodeName == nodeName {
+		if pod.Spec.NodeName == nodeName && !isDaemonSetPod(pod) {
 			count++
 		}
 	}
 	return count
+}
+
+// isDaemonSetPod checks if pod is owned by a DaemonSet
+func isDaemonSetPod(pod *corev1.Pod) bool {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "DaemonSet" {
+			return true
+		}
+	}
+	return false
 }
 
 // WaitForCacheSync waits for all caches to sync
