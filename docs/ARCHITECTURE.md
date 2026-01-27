@@ -450,11 +450,13 @@ func (m *Manager) Start(ctx context.Context) error {
     m.eventWatcher.Start(ctx)
     m.pdbWatcher.Start(ctx)
 
-    m.wg.Add(1)
-    go func() {                                          // Migration cleanup goroutine
-        defer m.wg.Done()
-        m.migrations.(*migrationTracker).runCleanup(ctx) // TODO: fix type assertion
-    }()
+    if tracker, ok := m.migrations.(*migrationTracker); ok {
+        m.wg.Add(1)
+        go func() {                                      // Migration cleanup goroutine
+            defer m.wg.Done()
+            tracker.runCleanup(ctx)
+        }()
+    }
 
     return nil
 }
@@ -1247,7 +1249,6 @@ require (
 | Issue | Location | Description |
 |-------|----------|-------------|
 | **Package-level state** | `cli/root.go:8-14` | `ConfigFlags` is global; should pass explicitly |
-| **Type assertion without check** | `watcher/manager.go:101` | `m.migrations.(*migrationTracker)` can panic |
 
 ### 13.2 Medium Priority
 

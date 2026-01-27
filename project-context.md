@@ -1,7 +1,7 @@
 # Kupgrade Project Context
 
 > **Purpose**: Critical rules and patterns for AI agents implementing code.
-> **Last Updated**: 2026-01-27
+> **Last Updated**: 2026-01-28
 
 ---
 
@@ -196,16 +196,6 @@ var ConfigFlags *genericclioptions.ConfigFlags  // Global mutable state
 ```
 
 **Fix**: Pass explicitly to commands.
-
-### P7: Type Assertion Without Check (HIGH)
-
-**Location**: `internal/watcher/manager.go:87-89`
-
-```go
-m.migrations.(*migrationTracker).runCleanup(ctx)  // Panics if wrong type
-```
-
-**Fix**: Use ok pattern or export in interface.
 
 ---
 
