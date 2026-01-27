@@ -95,11 +95,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	// Start migration cleanup goroutine
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		m.migrations.(*migrationTracker).runCleanup(ctx)
-	}()
+	if tracker, ok := m.migrations.(*migrationTracker); ok {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			tracker.runCleanup(ctx)
+		}()
+	}
 
 	return nil
 }
