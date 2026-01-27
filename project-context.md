@@ -185,20 +185,6 @@ Full ADR details in `docs/ARCHITECTURE.md` section 12.
 
 ---
 
-## Known Tech Debt
-
-### P6: Package-Level ConfigFlags (HIGH)
-
-**Location**: `internal/cli/root.go:8-14`
-
-```go
-var ConfigFlags *genericclioptions.ConfigFlags  // Global mutable state
-```
-
-**Fix**: Pass explicitly to commands.
-
----
-
 ## Forbidden Practices
 
 1. **No stage computation in TUI** - Watcher computes, TUI displays

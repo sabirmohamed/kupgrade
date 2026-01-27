@@ -5,17 +5,12 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-var (
-	// ConfigFlags provides kubectl-compatible flags
-	ConfigFlags *genericclioptions.ConfigFlags
-
-	// Version is set at build time
-	Version = "dev"
-)
+// Version is set at build time
+var Version = "dev"
 
 // NewRootCmd creates the root command
 func NewRootCmd() *cobra.Command {
-	ConfigFlags = genericclioptions.NewConfigFlags(true)
+	configFlags := genericclioptions.NewConfigFlags(true)
 
 	cmd := &cobra.Command{
 		Use:   "kupgrade",
@@ -24,10 +19,10 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	// Add kubectl-compatible flags
-	ConfigFlags.AddFlags(cmd.PersistentFlags())
+	configFlags.AddFlags(cmd.PersistentFlags())
 
 	// Add subcommands
-	cmd.AddCommand(NewWatchCmd())
+	cmd.AddCommand(NewWatchCmd(configFlags))
 	cmd.AddCommand(NewVersionCmd())
 
 	return cmd

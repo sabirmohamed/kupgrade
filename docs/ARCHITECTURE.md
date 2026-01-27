@@ -292,10 +292,10 @@ func main() {
 **root.go** - Sets up Cobra root command with ConfigFlags:
 
 ```go
-var ConfigFlags *genericclioptions.ConfigFlags  // Package-level (TODO: pass explicitly)
+var Version = "dev"
 
 func NewRootCmd() *cobra.Command {
-    ConfigFlags = genericclioptions.NewConfigFlags(true)
+    configFlags := genericclioptions.NewConfigFlags(true)
     cmd := &cobra.Command{...}
     ConfigFlags.AddFlags(cmd.PersistentFlags())  // Adds --context, --kubeconfig, etc.
     cmd.AddCommand(NewWatchCmd())
@@ -1246,9 +1246,7 @@ require (
 
 ### 13.1 High Priority
 
-| Issue | Location | Description |
-|-------|----------|-------------|
-| **Package-level state** | `cli/root.go:8-14` | `ConfigFlags` is global; should pass explicitly |
+*No high priority issues remaining.*
 
 ### 13.2 Medium Priority
 

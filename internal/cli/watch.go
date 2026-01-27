@@ -9,17 +9,20 @@ import (
 	"github.com/sabirmohamed/kupgrade/internal/tui"
 	"github.com/sabirmohamed/kupgrade/internal/watcher"
 	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
 
-var targetVersion string
-
 // NewWatchCmd creates the watch command
-func NewWatchCmd() *cobra.Command {
+func NewWatchCmd(configFlags *genericclioptions.ConfigFlags) *cobra.Command {
+	var targetVersion string
+
 	cmd := &cobra.Command{
 		Use:   "watch",
 		Short: "Watch cluster upgrade progress",
 		Long:  "Watch your Kubernetes cluster in real-time during upgrades, showing node state changes, pod migrations, and events.",
-		RunE:  runWatch,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runWatch(configFlags, targetVersion)
+		},
 	}
 
 	cmd.Flags().StringVar(&targetVersion, "target-version", "", "Override auto-detected target version")
@@ -27,10 +30,10 @@ func NewWatchCmd() *cobra.Command {
 	return cmd
 }
 
-func runWatch(cmd *cobra.Command, args []string) error {
+func runWatch(configFlags *genericclioptions.ConfigFlags, targetVersion string) error {
 	ctx := signals.SetupSignalHandler()
 
-	client, err := kube.NewClient(ConfigFlags)
+	client, err := kube.NewClient(configFlags)
 	if err != nil {
 		return fmt.Errorf("cli: %w", err)
 	}
