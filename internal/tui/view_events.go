@@ -9,12 +9,81 @@ import (
 func (m Model) renderEventsScreen() string {
 	var b strings.Builder
 	b.WriteString(m.renderHeader())
+	b.WriteString("\n")
+
+	// Filter indicator
+	filterLine := m.renderEventFilterBar()
+	b.WriteString(filterLine)
 	b.WriteString("\n\n")
 
-	if len(m.events) == 0 {
-		b.WriteString(footerDescStyle.Render("  Waiting for events..."))
+	events := m.filteredEvents()
+
+	if len(events) == 0 {
+		if m.eventFilter == EventFilterAll {
+			b.WriteString(footerDescStyle.Render("  Waiting for events..."))
+		} else {
+			b.WriteString(footerDescStyle.Render(fmt.Sprintf("  No %s events", strings.ToLower(m.eventFilterName()))))
+		}
+	} else if m.eventAggregated {
+		// Aggregated view
+		aggregated := aggregateEvents(events)
+		for i, ag := range aggregated {
+			cursor := "  "
+			if i == m.listIndex {
+				cursor = "► "
+			}
+
+			ts := timestampStyle.Render(ag.Timestamp.Format("15:04:05"))
+			icon := m.severityIcon(ag.Severity)
+
+			// Expand/collapse indicator
+			expandIcon := "▸"
+			if m.expandedGroup == ag.Reason {
+				expandIcon = "▾"
+			}
+
+			// Main line
+			var line string
+			if ag.Count > 1 {
+				line = fmt.Sprintf("%s%s %s %s %s", cursor, ts, icon, expandIcon, ag.Format(icon))
+			} else {
+				line = fmt.Sprintf("%s%s %s   %s", cursor, ts, icon, ag.Format(icon))
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+
+			// Show expanded events for this group
+			if m.expandedGroup == ag.Reason && ag.Count > 1 {
+				for _, e := range events {
+					reason := extractReason(e.Message)
+					if reason == ag.Reason {
+						subTs := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
+						subIcon := m.severityIcon(e.Severity)
+						nodeName := e.NodeName
+						if nodeName == "" {
+							nodeName = "-"
+						}
+						// Use available width minus prefix (timestamp, icon, node, indent)
+					msgWidth := m.width - 45
+					if msgWidth < 40 {
+						msgWidth = 40
+					}
+					subLine := fmt.Sprintf("       %s %s %-12s %s",
+							subTs, subIcon, nodeName, truncateMessage(e.Message, msgWidth))
+						b.WriteString(footerDescStyle.Render(subLine))
+						b.WriteString("\n")
+					}
+				}
+			} else if i == m.listIndex && ag.Count > 1 {
+				// Show hint to expand
+				hintLine := footerDescStyle.Render("       (press 'e' to expand)")
+				b.WriteString(hintLine)
+				b.WriteString("\n")
+			}
+		}
 	} else {
-		for i, e := range m.events {
+		// Raw view
+		for i, e := range events {
 			cursor := "  "
 			if i == m.listIndex {
 				cursor = "► "
@@ -36,14 +105,71 @@ func (m Model) renderEventsScreen() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.renderFooter())
+	b.WriteString(m.renderEventsFooter())
 
 	return m.placeContent(b.String())
 }
 
+// renderEventFilterBar renders the filter toggle bar
+func (m Model) renderEventFilterBar() string {
+	upgradeStyle := footerDescStyle
+	warningsStyle := footerDescStyle
+	allStyle := footerDescStyle
+
+	// Highlight the active filter
+	switch m.eventFilter {
+	case EventFilterUpgrade:
+		upgradeStyle = footerKeyStyle
+	case EventFilterWarnings:
+		warningsStyle = footerKeyStyle
+	case EventFilterAll:
+		allStyle = footerKeyStyle
+	}
+
+	// Aggregation indicator
+	aggLabel := "Raw"
+	aggStyle := footerDescStyle
+	if m.eventAggregated {
+		aggLabel = "Grouped"
+		aggStyle = footerKeyStyle
+	}
+
+	if m.eventAggregated {
+		return fmt.Sprintf("  %s %s  %s %s  %s %s  │  %s %s  %s expand",
+			footerKeyStyle.Render("[u]"), upgradeStyle.Render("Upgrade"),
+			footerKeyStyle.Render("[w]"), warningsStyle.Render("Warnings"),
+			footerKeyStyle.Render("[a]"), allStyle.Render("All"),
+			footerKeyStyle.Render("[g]"), aggStyle.Render(aggLabel),
+			footerKeyStyle.Render("[e]"))
+	}
+	return fmt.Sprintf("  %s %s  %s %s  %s %s  │  %s %s",
+		footerKeyStyle.Render("[u]"), upgradeStyle.Render("Upgrade"),
+		footerKeyStyle.Render("[w]"), warningsStyle.Render("Warnings"),
+		footerKeyStyle.Render("[a]"), allStyle.Render("All"),
+		footerKeyStyle.Render("[g]"), aggStyle.Render(aggLabel))
+}
+
+// renderEventsFooter renders footer with event-specific hints
+func (m Model) renderEventsFooter() string {
+	events := m.filteredEvents()
+	var countInfo string
+	if m.eventAggregated {
+		aggregated := aggregateEvents(events)
+		countInfo = fmt.Sprintf("%d groups from %d events", len(aggregated), len(events))
+	} else {
+		countInfo = fmt.Sprintf("Showing %d of %d events", len(events), len(m.events))
+	}
+	return footerDescStyle.Render("  " + countInfo + "  •  ↑↓ navigate  •  q back")
+}
+
 // renderEventsPanel renders events in bottom panel (legacy layout)
 func (m Model) renderEventsPanel(width int) string {
-	title := panelTitleStyle.Render("• EVENTS")
+	aggLabel := ""
+	if m.eventAggregated {
+		aggLabel = " grouped"
+	}
+	filterLabel := fmt.Sprintf("• EVENTS [%s%s]", m.eventFilterName(), aggLabel)
+	title := panelTitleStyle.Render(filterLabel)
 	var lines []string
 	lines = append(lines, title)
 
@@ -52,10 +178,25 @@ func (m Model) renderEventsPanel(width int) string {
 		maxMsgLen = eventMinMessageWidth
 	}
 
-	if len(m.events) == 0 {
-		lines = append(lines, footerDescStyle.Render("Waiting for events..."))
+	events := m.filteredEvents()
+
+	if len(events) == 0 {
+		lines = append(lines, footerDescStyle.Render("No events matching filter"))
+	} else if m.eventAggregated {
+		// Aggregated view in panel
+		aggregated := aggregateEvents(events)
+		for _, ag := range aggregated {
+			ts := timestampStyle.Render(ag.Timestamp.Format("15:04:05"))
+			icon := m.severityIcon(ag.Severity)
+			msg := ag.Format(icon)
+			if len(msg) > maxMsgLen {
+				msg = msg[:maxMsgLen] + "..."
+			}
+			lines = append(lines, fmt.Sprintf("%s %s %s", ts, icon, msg))
+		}
 	} else {
-		for _, e := range m.events {
+		// Raw view
+		for _, e := range events {
 			ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
 			icon := m.severityIcon(e.Severity)
 			msg := e.Message
@@ -68,4 +209,65 @@ func (m Model) renderEventsPanel(width int) string {
 
 	content := strings.Join(lines, "\n")
 	return panelStyle.Width(width).Render(content)
+}
+
+// truncateMessage smartly truncates a message, preserving important parts
+// Keeps: [Reason] prefix, shortened resource name, error type at end
+func truncateMessage(msg string, maxLen int) string {
+	if len(msg) <= maxLen {
+		return msg
+	}
+
+	// Try to find the error description after the last colon
+	lastColon := strings.LastIndex(msg, ": ")
+	if lastColon > 0 && lastColon < len(msg)-2 {
+		prefix := msg[:lastColon]
+		suffix := msg[lastColon+2:]
+
+		// Shorten the prefix (resource name), keep the suffix (error)
+		availableForPrefix := maxLen - len(suffix) - 5 // 5 for ": " and "..."
+		if availableForPrefix > 20 && len(suffix) < maxLen/2 {
+			// Shorten prefix, keep full suffix
+			shortPrefix := shortenResourceName(prefix, availableForPrefix)
+			return shortPrefix + ": " + suffix
+		}
+	}
+
+	// Fallback: truncate end but try to end at word boundary
+	if maxLen > 10 {
+		truncated := msg[:maxLen-3]
+		// Find last space to break at word
+		if lastSpace := strings.LastIndex(truncated, " "); lastSpace > maxLen/2 {
+			return truncated[:lastSpace] + "..."
+		}
+		return truncated + "..."
+	}
+	return msg[:maxLen-3] + "..."
+}
+
+// shortenResourceName shortens names with hashes like "app-845849966b-flnj7" to "app-...-flnj7"
+func shortenResourceName(name string, maxLen int) string {
+	if len(name) <= maxLen {
+		return name
+	}
+
+	// Look for hash patterns (e.g., deployment-hash-podHash)
+	parts := strings.Split(name, "-")
+	if len(parts) >= 3 {
+		// Keep first and last parts, shorten middle
+		first := parts[0]
+		last := parts[len(parts)-1]
+
+		// If we have room, keep more context
+		if len(first)+len(last)+5 <= maxLen {
+			return first + "-...-" + last
+		}
+	}
+
+	// Simple truncation with middle ellipsis
+	if maxLen > 10 {
+		half := (maxLen - 3) / 2
+		return name[:half] + "..." + name[len(name)-half:]
+	}
+	return name[:maxLen-3] + "..."
 }

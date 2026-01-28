@@ -35,6 +35,15 @@ const (
 	OverlayNodeDetail
 )
 
+// EventFilter represents the event filtering mode
+type EventFilter int
+
+const (
+	EventFilterUpgrade  EventFilter = iota // Upgrade-related events only (default)
+	EventFilterWarnings                    // Warning and Error events only
+	EventFilterAll                         // All events
+)
+
 // Config holds TUI configuration
 type Config struct {
 	Context         string
@@ -58,11 +67,14 @@ type Model struct {
 	height int
 
 	// Navigation state
-	screen        Screen  // Current screen (0-6)
-	overlay       Overlay // Modal overlay (none, help, detail)
-	selectedStage int     // For Overview screen
-	selectedNode  int     // For Overview screen
-	listIndex     int     // For list-based screens (Nodes, Pods, etc.)
+	screen           Screen      // Current screen (0-6)
+	overlay          Overlay     // Modal overlay (none, help, detail)
+	selectedStage    int         // For Overview screen
+	selectedNode     int         // For Overview screen
+	listIndex        int         // For list-based screens (Nodes, Pods, etc.)
+	eventFilter      EventFilter // Event filtering mode (upgrade/warnings/all)
+	eventAggregated  bool        // Whether to show aggregated events
+	expandedGroup    string      // Currently expanded event group (reason)
 
 	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
@@ -280,4 +292,62 @@ func (m *Model) progressPercent() int {
 		return 0
 	}
 	return (m.completedNodes() * 100) / total
+}
+
+// filteredEvents returns events based on the current filter mode
+func (m *Model) filteredEvents() []types.Event {
+	if m.eventFilter == EventFilterAll {
+		return m.events
+	}
+
+	var filtered []types.Event
+	for _, e := range m.events {
+		switch m.eventFilter {
+		case EventFilterUpgrade:
+			// Show upgrade-related events only
+			if isUpgradeEvent(e.Type) {
+				filtered = append(filtered, e)
+			}
+		case EventFilterWarnings:
+			// Show warnings and errors only
+			if e.Severity == types.SeverityWarning || e.Severity == types.SeverityError {
+				filtered = append(filtered, e)
+			}
+		}
+	}
+	return filtered
+}
+
+// isUpgradeEvent returns true if the event type is upgrade-related
+func isUpgradeEvent(t types.EventType) bool {
+	switch t {
+	case types.EventNodeCordon,
+		types.EventNodeUncordon,
+		types.EventNodeReady,
+		types.EventNodeNotReady,
+		types.EventNodeVersion,
+		types.EventPodEvicted,
+		types.EventPodFailed,
+		types.EventPodDeleted,
+		types.EventMigration,
+		types.EventK8sWarning,
+		types.EventK8sError:
+		return true
+	default:
+		return false
+	}
+}
+
+// eventFilterName returns the display name for the current filter
+func (m *Model) eventFilterName() string {
+	switch m.eventFilter {
+	case EventFilterUpgrade:
+		return "UPGRADE"
+	case EventFilterWarnings:
+		return "WARNINGS"
+	case EventFilterAll:
+		return "ALL"
+	default:
+		return "UPGRADE"
+	}
 }

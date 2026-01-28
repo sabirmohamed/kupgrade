@@ -221,7 +221,50 @@ func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	return m.handleListNavigation(msg, len(m.events))
+	// Event filter toggles
+	if matchKey(msg, keys.EventUpgrade) {
+		m.eventFilter = EventFilterUpgrade
+		m.listIndex = 0
+		return *m, nil
+	}
+	if matchKey(msg, keys.EventWarnings) {
+		m.eventFilter = EventFilterWarnings
+		m.listIndex = 0
+		return *m, nil
+	}
+	if matchKey(msg, keys.EventAll) {
+		m.eventFilter = EventFilterAll
+		m.listIndex = 0
+		return *m, nil
+	}
+	// Aggregation toggle
+	if matchKey(msg, keys.EventAggregate) {
+		m.eventAggregated = !m.eventAggregated
+		m.expandedGroup = "" // Reset expansion when toggling view
+		m.listIndex = 0
+		return *m, nil
+	}
+	// Expand/collapse group (only in aggregated view)
+	if matchKey(msg, keys.EventExpand) && m.eventAggregated {
+		aggregated := aggregateEvents(m.filteredEvents())
+		if m.listIndex < len(aggregated) {
+			selectedReason := aggregated[m.listIndex].Reason
+			if m.expandedGroup == selectedReason {
+				m.expandedGroup = "" // Collapse
+			} else {
+				m.expandedGroup = selectedReason // Expand
+			}
+		}
+		return *m, nil
+	}
+
+	// Calculate item count based on view mode
+	itemCount := len(m.filteredEvents())
+	if m.eventAggregated {
+		itemCount = len(aggregateEvents(m.filteredEvents()))
+	}
+
+	return m.handleListNavigation(msg, itemCount)
 }
 
 func (m *Model) handleStatsKey(msg tea.KeyMsg) (Model, tea.Cmd) {

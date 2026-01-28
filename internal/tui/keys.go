@@ -24,6 +24,12 @@ type keyMap struct {
 	Bottom   []string
 	PageUp   []string
 	PageDown []string
+	// Event filtering
+	EventUpgrade   []string
+	EventWarnings  []string
+	EventAll       []string
+	EventAggregate []string
+	EventExpand    []string
 }
 
 var keys = keyMap{
@@ -46,6 +52,12 @@ var keys = keyMap{
 	Bottom:   []string{"G"},
 	PageUp:   []string{"ctrl+u"},
 	PageDown: []string{"ctrl+d"},
+	// Event filtering
+	EventUpgrade:   []string{"u"},
+	EventWarnings:  []string{"w"},
+	EventAll:       []string{"a"},
+	EventAggregate: []string{"g"},
+	EventExpand:    []string{"e"},
 }
 
 func matchKey(msg tea.KeyMsg, bindings []string) bool {
