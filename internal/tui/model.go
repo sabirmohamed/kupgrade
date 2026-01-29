@@ -4,7 +4,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/progress"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
@@ -61,6 +66,7 @@ type Config struct {
 // Model is the TUI state
 type Model struct {
 	config Config
+	keys   keyMap
 
 	// Dimensions
 	width  int
@@ -71,7 +77,7 @@ type Model struct {
 	overlay          Overlay     // Modal overlay (none, help, detail)
 	selectedStage    int         // For Overview screen
 	selectedNode     int         // For Overview screen
-	listIndex        int         // For list-based screens (Nodes, Pods, etc.)
+	listIndex        int         // For list-based screens (Overview node list, Events, Blockers)
 	eventFilter      EventFilter // Event filtering mode (upgrade/warnings/all)
 	eventAggregated  bool        // Whether to show aggregated events
 	expandedGroup    string      // Currently expanded event group (reason)
@@ -85,9 +91,14 @@ type Model struct {
 	blockers     []types.Blocker
 	eventCount   int
 
+	// Bubbles components
+	spinner   spinner.Model
+	progress  progress.Model
+	smallProg progress.Model // Compact progress bar for cards/drains
+	help      help.Model
+
 	// Animation
-	spinnerFrame int
-	currentTime  time.Time
+	currentTime time.Time
 
 	// Error
 	fatalError error
@@ -95,8 +106,45 @@ type Model struct {
 
 // New creates a new TUI model
 func New(cfg Config) Model {
+	// Ensure lipgloss renders colors. The default renderer auto-detects from
+	// termenv.DefaultOutput(), which may resolve to Ascii when bubbletea owns
+	// stdout. Force TrueColor so StyleFunc-based table coloring works.
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	// Spinner
+	sp := spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(colorWarning)),
+	)
+
+	// Progress bar (header)
+	prog := progress.New(
+		progress.WithSolidFill(string(colorComplete)),
+		progress.WithoutPercentage(),
+		progress.WithFillCharacters('█', '░'),
+		progress.WithWidth(headerProgressBarWidth),
+	)
+
+	// Small progress bar (cards/drains)
+	smallProg := progress.New(
+		progress.WithSolidFill(string(colorComplete)),
+		progress.WithoutPercentage(),
+		progress.WithFillCharacters('█', '░'),
+		progress.WithWidth(12),
+	)
+
+	// Help
+	h := help.New()
+	h.Styles.ShortKey = footerKeyStyle
+	h.Styles.ShortDesc = footerDescStyle
+	h.Styles.ShortSeparator = footerDescStyle
+	h.Styles.FullKey = footerKeyStyle
+	h.Styles.FullDesc = footerDescStyle
+	h.Styles.FullSeparator = footerDescStyle
+
 	m := Model{
 		config:       cfg,
+		keys:         defaultKeys,
 		screen:       ScreenOverview,
 		overlay:      OverlayNone,
 		nodes:        make(map[string]types.NodeState),
@@ -106,6 +154,10 @@ func New(cfg Config) Model {
 		migrations:   make([]types.Migration, 0, maxMigrations),
 		blockers:     make([]types.Blocker, 0),
 		currentTime:  time.Now(),
+		spinner:      sp,
+		progress:     prog,
+		smallProg:    smallProg,
+		help:         h,
 	}
 
 	// Load initial nodes
@@ -132,7 +184,7 @@ func (m Model) Init() tea.Cmd {
 		waitForPodState(m.config.PodStateCh),
 		waitForBlocker(m.config.BlockerCh),
 		tick(),
-		spinnerTick(),
+		m.spinner.Tick,
 	)
 }
 
@@ -182,12 +234,6 @@ func tick() tea.Cmd {
 	})
 }
 
-func spinnerTick() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
-		return SpinnerMsg{}
-	})
-}
-
 // Helper accessors
 
 func (m Model) contextName() string   { return m.config.Context }
@@ -230,7 +276,6 @@ func (m *Model) nodesInSelectedStage() []string {
 }
 
 func (m *Model) selectedNodeName() string {
-	// New unified list approach using listIndex
 	allNodes := m.getSortedNodeList()
 	if m.listIndex < 0 || m.listIndex >= len(allNodes) {
 		return ""
@@ -304,12 +349,10 @@ func (m *Model) filteredEvents() []types.Event {
 	for _, e := range m.events {
 		switch m.eventFilter {
 		case EventFilterUpgrade:
-			// Show upgrade-related events only
 			if isUpgradeEvent(e.Type) {
 				filtered = append(filtered, e)
 			}
 		case EventFilterWarnings:
-			// Show warnings and errors only
 			if e.Severity == types.SeverityWarning || e.Severity == types.SeverityError {
 				filtered = append(filtered, e)
 			}
@@ -351,3 +394,19 @@ func (m *Model) eventFilterName() string {
 		return "UPGRADE"
 	}
 }
+
+// calcScrollOffset returns scroll offset to keep selected item visible
+func calcScrollOffset(selected, visibleRows, totalItems int) int {
+	if totalItems <= visibleRows {
+		return 0
+	}
+	offset := 0
+	if selected >= visibleRows {
+		offset = selected - visibleRows + 1
+	}
+	if offset > totalItems-visibleRows {
+		offset = totalItems - visibleRows
+	}
+	return offset
+}
+

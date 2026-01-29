@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
@@ -14,30 +15,25 @@ func (m Model) renderNodesScreen() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 
-	// Calculate name column width based on terminal width
-	fixedWidth := 2 + 12 + 12 + 8 + 12 + 20 + 6
-	nameWidth := m.width - fixedWidth
-	if nameWidth < 20 {
-		nameWidth = 20
-	}
-	if nameWidth > 50 {
-		nameWidth = 50
+	if len(m.nodes) == 0 {
+		b.WriteString(footerDescStyle.Render("  No nodes discovered"))
+	} else {
+		b.WriteString(m.renderNodesTable())
 	}
 
-	// Table header
-	header := fmt.Sprintf("  %-*s %-12s %-12s %-8s %-12s %-20s",
-		nameWidth, "NAME", "VERSION", "STAGE", "AGE", "CONDITIONS", "TAINTS")
-	b.WriteString(panelTitleStyle.Render(header))
 	b.WriteString("\n")
+	b.WriteString(m.renderFooter())
 
-	// Node list
+	return m.placeContent(b.String())
+}
+
+// renderNodesTable renders the nodes table using lipgloss/table with per-cell coloring
+func (m Model) renderNodesTable() string {
 	nodes := m.sortedNodeNames()
+
+	rows := make([][]string, len(nodes))
 	for i, name := range nodes {
 		node := m.nodes[name]
-		cursor := "  "
-		if i == m.listIndex {
-			cursor = "► "
-		}
 
 		conditions := "Ready"
 		if !node.Ready {
@@ -58,37 +54,106 @@ func (m Model) renderNodesScreen() string {
 			age = "-"
 		}
 
-		displayName := name
-		if len(name) > nameWidth {
-			displayName = truncateString(name, nameWidth)
-		}
-
-		line := fmt.Sprintf("%s%-*s %-12s %-12s %-8s %-12s %-20s",
-			cursor,
-			nameWidth,
-			displayName,
+		rows[i] = []string{
+			name,
 			node.Version,
-			node.Stage,
+			string(node.Stage),
 			age,
-			truncateString(conditions, 12),
-			truncateString(taints, 20),
-		)
-
-		if i == m.listIndex {
-			b.WriteString(nodeNameStyle.Render(line))
-		} else {
-			b.WriteString(line)
+			conditions,
+			taints,
 		}
-		b.WriteString("\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(m.renderFooter())
+	visibleRows := m.height - 10
+	if visibleRows < 5 {
+		visibleRows = 5
+	}
+	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(nodes))
 
-	return m.placeContent(b.String())
+	tableWidth := m.width - 2
+	if tableWidth < 80 {
+		tableWidth = 80
+	}
+
+	t := table.New().
+		Headers("NAME", "VERSION", "STAGE", "AGE", "CONDITIONS", "TAINTS").
+		Rows(rows...).
+		Width(tableWidth).
+		Height(visibleRows).
+		Offset(scrollOffset).
+		Border(lipgloss.RoundedBorder()).
+		BorderColumn(false).
+		BorderRow(false).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderHeader(true).
+		BorderStyle(tableBorderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			style := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				style = style.Foreground(colorTextMuted).Bold(true)
+				if col == 3 { // AGE
+					style = style.Align(lipgloss.Right)
+				}
+				return style
+			}
+
+			actualIdx := row
+
+			// Alternating row backgrounds
+			if actualIdx%2 == 0 {
+				style = style.Background(colorBg)
+			} else {
+				style = style.Background(colorBgAlt)
+			}
+
+			// Selected row highlight
+			if actualIdx == m.listIndex {
+				style = style.Background(colorSelected).Foreground(colorTextBold)
+			}
+
+			// Right-align AGE column
+			if col == 3 {
+				style = style.Align(lipgloss.Right)
+			}
+
+			if actualIdx >= len(nodes) {
+				return style
+			}
+
+			// Color STAGE column
+			if col == 2 {
+				node := m.nodes[nodes[actualIdx]]
+				if sc, ok := stageColors[string(node.Stage)]; ok {
+					style = style.Foreground(sc)
+				}
+			}
+
+			// Color CONDITIONS column
+			if col == 4 {
+				node := m.nodes[nodes[actualIdx]]
+				if !node.Ready {
+					style = style.Foreground(colorError)
+				}
+			}
+
+			return style
+		})
+
+	rendered := t.String()
+
+	// Show scroll indicator
+	if len(nodes) > visibleRows {
+		pos := fmt.Sprintf(" %d/%d", m.listIndex+1, len(nodes))
+		rendered += "\n" + footerDescStyle.Render(pos)
+	}
+
+	return rendered
 }
 
-// renderNodeColumns renders old column-based layout (kept for rollback)
+// renderNodeColumns renders old column-based layout (kept for overview kanban)
 func (m Model) renderNodeColumns() string {
 	stages := types.AllStages()
 	columns := make([]string, len(stages))
@@ -160,7 +225,7 @@ func (m Model) renderNodeCard(node types.NodeState, selected bool, cardWidth int
 		b.WriteString(fmt.Sprintf("%d pods remaining\n", node.PodCount))
 		b.WriteString(m.renderSmallProgressBar(node.DrainProgress))
 	} else if node.Stage == types.StageUpgrading {
-		b.WriteString(m.spinner() + " reimaging...")
+		b.WriteString(m.spinner.View() + " reimaging...")
 	} else {
 		b.WriteString(nodePodStyle.Render(fmt.Sprintf("%d pods", node.PodCount)))
 	}

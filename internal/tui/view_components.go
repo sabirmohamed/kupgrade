@@ -23,7 +23,7 @@ func (m Model) renderCompactHeader() string {
 	versionDisplay := versionStyle.Render(version)
 
 	// Progress bar with percentage
-	progress := m.renderProgressBar(headerProgressBarWidth)
+	progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
 	percent := fmt.Sprintf("%3d%%", m.progressPercent())
 
 	timeDisplay := timeStyle.Render(m.currentTime.Format("15:04:05"))
@@ -48,7 +48,7 @@ func (m Model) renderHeader() string {
 	}
 	versionDisplay := versionStyle.Render(version)
 
-	progress := m.renderProgressBar(headerProgressBarWidth)
+	progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
 	percent := fmt.Sprintf("%d%%", m.progressPercent())
 
 	timeDisplay := timeStyle.Render(m.currentTime.Format("15:04:05"))
@@ -57,22 +57,9 @@ func (m Model) renderHeader() string {
 		titleDisplay, context, versionDisplay, progress, percent, timeDisplay)
 }
 
-// renderProgressBar renders a progress bar of given width
-func (m Model) renderProgressBar(width int) string {
-	percent := m.progressPercent()
-	filled := (percent * width) / 100
-	empty := width - filled
-
-	bar := strings.Repeat(progressBarFull, filled) + strings.Repeat(progressBarEmpty, empty)
-	return progressStyle.Render(bar)
-}
-
 // renderSmallProgressBar renders a small progress bar for node cards
 func (m Model) renderSmallProgressBar(percent int) string {
-	width := 12
-	filled := (percent * width) / 100
-	empty := width - filled
-	bar := strings.Repeat(progressBarFull, filled) + strings.Repeat(progressBarEmpty, empty)
+	bar := m.smallProg.ViewAs(float64(percent) / 100.0)
 	return fmt.Sprintf("%s %d%%", bar, percent)
 }
 
@@ -85,7 +72,6 @@ func (m Model) renderPipelineRow() string {
 		count := len(m.nodesByStage[stage])
 		name := string(stage)
 
-		// Highlight selected stage
 		var stageStr string
 		if i == m.selectedStage {
 			stageStr = stageStyleSelected(name).Render(name)
@@ -102,7 +88,6 @@ func (m Model) renderPipelineRow() string {
 
 		parts = append(parts, fmt.Sprintf("%s\n%s", centerText(stageStr, 12), centerText(countStr, 12)))
 
-		// Add arrow between stages (not after last)
 		if i < len(stages)-1 {
 			parts = append(parts, footerDescStyle.Render("  —  "))
 		}
@@ -111,9 +96,9 @@ func (m Model) renderPipelineRow() string {
 	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
 }
 
-// renderFooter renders screen navigation footer
+// renderFooter renders screen navigation footer with screen hints + key help
 func (m Model) renderFooter() string {
-	hints := []struct {
+	screenHints := []struct {
 		key  string
 		desc string
 	}{
@@ -123,14 +108,18 @@ func (m Model) renderFooter() string {
 		{"3", "pods"},
 		{"4", "blockers"},
 		{"5", "events"},
-		{"?", "help"},
-		{"q", "quit"},
 	}
 
 	var parts []string
-	for _, h := range hints {
+	for _, h := range screenHints {
 		parts = append(parts, footerKeyStyle.Render(h.key)+" "+footerDescStyle.Render(h.desc))
 	}
+
+	// Append key help from bubbles
+	parts = append(parts,
+		footerKeyStyle.Render("?")+" "+footerDescStyle.Render("help"),
+		footerKeyStyle.Render("q")+" "+footerDescStyle.Render("quit"),
+	)
 
 	return footerStyle.Render(strings.Join(parts, "  "))
 }
@@ -168,14 +157,6 @@ func truncateString(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// min returns the smaller of two ints
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // Layout calculation helpers
@@ -224,3 +205,51 @@ func (m Model) panelWidths() (blockers, migrations, events int) {
 
 	return blockers, migrations, events
 }
+
+// getFilteredPodList returns pods filtered to upgrading nodes (or all if none upgrading)
+func (m *Model) getFilteredPodList() []types.PodState {
+	upgradeNodes := make(map[string]bool)
+	for _, name := range m.nodesByStage[types.StageCordoned] {
+		upgradeNodes[name] = true
+	}
+	for _, name := range m.nodesByStage[types.StageDraining] {
+		upgradeNodes[name] = true
+	}
+	for _, name := range m.nodesByStage[types.StageUpgrading] {
+		upgradeNodes[name] = true
+	}
+
+	var podList []types.PodState
+	showAll := len(upgradeNodes) == 0
+	for _, pod := range m.pods {
+		if showAll || upgradeNodes[pod.NodeName] {
+			podList = append(podList, pod)
+		}
+	}
+
+	sort.Slice(podList, func(i, j int) bool {
+		if podList[i].NodeName != podList[j].NodeName {
+			return podList[i].NodeName < podList[j].NodeName
+		}
+		if podList[i].Namespace != podList[j].Namespace {
+			return podList[i].Namespace < podList[j].Namespace
+		}
+		return podList[i].Name < podList[j].Name
+	})
+
+	return podList
+}
+
+// getDrainNodes returns sorted list of nodes in drain pipeline
+func (m *Model) getDrainNodes() []string {
+	var drainNodes []string
+	for _, name := range m.nodesByStage[types.StageCordoned] {
+		drainNodes = append(drainNodes, name)
+	}
+	for _, name := range m.nodesByStage[types.StageDraining] {
+		drainNodes = append(drainNodes, name)
+	}
+	sort.Strings(drainNodes)
+	return drainNodes
+}
+

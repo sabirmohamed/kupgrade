@@ -30,6 +30,3 @@ type ErrorMsg struct {
 
 // TickMsg triggers periodic updates
 type TickMsg struct{}
-
-// SpinnerMsg triggers spinner animation
-type SpinnerMsg struct{}

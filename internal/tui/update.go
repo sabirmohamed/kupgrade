@@ -3,11 +3,11 @@ package tui
 import (
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
-
-var spinnerFrames = []string{"◐", "◓", "◑", "◒"}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -20,6 +20,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.help.Width = msg.Width
 		return m, nil
 
 	case NodeUpdateMsg:
@@ -49,9 +50,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentTime = time.Now()
 		return m, tick()
 
-	case SpinnerMsg:
-		m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
-		return m, spinnerTick()
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -64,7 +66,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	}
 
 	// Quit: from Overview exits, from other screens returns to Overview
-	if matchKey(msg, keys.Quit) {
+	if key.Matches(msg, m.keys.Quit) {
 		if m.screen != ScreenOverview {
 			m.screen = ScreenOverview
 			return *m, nil
@@ -73,13 +75,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	}
 
 	// Help overlay toggle
-	if matchKey(msg, keys.Help) {
+	if key.Matches(msg, m.keys.Help) {
 		m.overlay = OverlayHelp
 		return *m, nil
 	}
 
 	// Escape: return to Overview
-	if matchKey(msg, keys.Escape) {
+	if key.Matches(msg, m.keys.Escape) {
 		m.screen = ScreenOverview
 		return *m, nil
 	}
@@ -113,8 +115,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleOverlayKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Any key closes overlay
-	if matchKey(msg, keys.Escape) || matchKey(msg, keys.Enter) || matchKey(msg, keys.Help) {
+	if key.Matches(msg, m.keys.Escape) || key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Help) {
 		m.overlay = OverlayNone
 		return *m, nil
 	}
@@ -130,38 +131,35 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	stages := types.AllStages()
 	allNodes := m.getSortedNodeList()
 
-	// Left/Right: change selected stage in pipeline header
-	if matchKey(msg, keys.Left) {
+	if key.Matches(msg, m.keys.Left) {
 		if m.selectedStage > 0 {
 			m.selectedStage--
 		}
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.Right) {
+	if key.Matches(msg, m.keys.Right) {
 		if m.selectedStage < len(stages)-1 {
 			m.selectedStage++
 		}
 		return *m, nil
 	}
 
-	// Up/Down: navigate unified node list
-	if matchKey(msg, keys.Up) {
+	if key.Matches(msg, m.keys.Up) {
 		if m.listIndex > 0 {
 			m.listIndex--
 		}
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.Down) {
+	if key.Matches(msg, m.keys.Down) {
 		if m.listIndex < len(allNodes)-1 {
 			m.listIndex++
 		}
 		return *m, nil
 	}
 
-	// Enter: show node detail overlay
-	if matchKey(msg, keys.Enter) {
+	if key.Matches(msg, m.keys.Enter) {
 		if m.listIndex < len(allNodes) {
 			nodeName := allNodes[m.listIndex]
 			if _, ok := m.nodes[nodeName]; ok {
@@ -174,16 +172,12 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return *m, nil
 }
 
-// Placeholder handlers for new screens - will be implemented in E1-E7
-
 func (m *Model) handleNodesKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m.handleListNavigation(msg, len(m.nodes))
 }
 
 func (m *Model) handleDrainsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Count cordoned + draining nodes (both are in the drain pipeline)
-	drainCount := len(m.nodesByStage[types.StageCordoned]) + len(m.nodesByStage[types.StageDraining])
-	return m.handleListNavigation(msg, drainCount)
+	return m.handleListNavigation(msg, len(m.getDrainNodes()))
 }
 
 func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -192,28 +186,7 @@ func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 // filteredPodCount returns count of pods on upgrading nodes (or all if none upgrading)
 func (m *Model) filteredPodCount() int {
-	upgradeNodes := make(map[string]bool)
-	for _, name := range m.nodesByStage[types.StageCordoned] {
-		upgradeNodes[name] = true
-	}
-	for _, name := range m.nodesByStage[types.StageDraining] {
-		upgradeNodes[name] = true
-	}
-	for _, name := range m.nodesByStage[types.StageUpgrading] {
-		upgradeNodes[name] = true
-	}
-
-	if len(upgradeNodes) == 0 {
-		return len(m.pods)
-	}
-
-	count := 0
-	for _, pod := range m.pods {
-		if upgradeNodes[pod.NodeName] {
-			count++
-		}
-	}
-	return count
+	return len(m.getFilteredPodList())
 }
 
 func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -222,43 +195,42 @@ func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	// Event filter toggles
-	if matchKey(msg, keys.EventUpgrade) {
+	if key.Matches(msg, m.keys.EventUpgrade) {
 		m.eventFilter = EventFilterUpgrade
 		m.listIndex = 0
 		return *m, nil
 	}
-	if matchKey(msg, keys.EventWarnings) {
+	if key.Matches(msg, m.keys.EventWarnings) {
 		m.eventFilter = EventFilterWarnings
 		m.listIndex = 0
 		return *m, nil
 	}
-	if matchKey(msg, keys.EventAll) {
+	if key.Matches(msg, m.keys.EventAll) {
 		m.eventFilter = EventFilterAll
 		m.listIndex = 0
 		return *m, nil
 	}
 	// Aggregation toggle
-	if matchKey(msg, keys.EventAggregate) {
+	if key.Matches(msg, m.keys.EventAggregate) {
 		m.eventAggregated = !m.eventAggregated
-		m.expandedGroup = "" // Reset expansion when toggling view
+		m.expandedGroup = ""
 		m.listIndex = 0
 		return *m, nil
 	}
 	// Expand/collapse group (only in aggregated view)
-	if matchKey(msg, keys.EventExpand) && m.eventAggregated {
+	if key.Matches(msg, m.keys.EventExpand) && m.eventAggregated {
 		aggregated := aggregateEvents(m.filteredEvents())
 		if m.listIndex < len(aggregated) {
 			selectedReason := aggregated[m.listIndex].Reason
 			if m.expandedGroup == selectedReason {
-				m.expandedGroup = "" // Collapse
+				m.expandedGroup = ""
 			} else {
-				m.expandedGroup = selectedReason // Expand
+				m.expandedGroup = selectedReason
 			}
 		}
 		return *m, nil
 	}
 
-	// Calculate item count based on view mode
 	itemCount := len(m.filteredEvents())
 	if m.eventAggregated {
 		itemCount = len(aggregateEvents(m.filteredEvents()))
@@ -268,33 +240,31 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleStatsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Stats screen has no list navigation
 	return *m, nil
 }
 
-// handleListNavigation provides common up/down/g/G/pgup/pgdown navigation for list screens
+// handleListNavigation provides common up/down/g/G/pgup/pgdown navigation for non-table list screens
 func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.Cmd) {
-	// Calculate page size (visible rows)
 	pageSize := m.height - 10
 	if pageSize < 5 {
 		pageSize = 5
 	}
 
-	if matchKey(msg, keys.Up) {
+	if key.Matches(msg, m.keys.Up) {
 		if m.listIndex > 0 {
 			m.listIndex--
 		}
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.Down) {
+	if key.Matches(msg, m.keys.Down) {
 		if m.listIndex < itemCount-1 {
 			m.listIndex++
 		}
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.PageUp) {
+	if key.Matches(msg, m.keys.PageUp) {
 		m.listIndex -= pageSize
 		if m.listIndex < 0 {
 			m.listIndex = 0
@@ -302,7 +272,7 @@ func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.PageDown) {
+	if key.Matches(msg, m.keys.PageDown) {
 		m.listIndex += pageSize
 		if m.listIndex >= itemCount {
 			m.listIndex = itemCount - 1
@@ -313,27 +283,26 @@ func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.Top) {
+	if key.Matches(msg, m.keys.Top) {
 		m.listIndex = 0
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.Bottom) {
+	if key.Matches(msg, m.keys.Bottom) {
 		if itemCount > 0 {
 			m.listIndex = itemCount - 1
 		}
 		return *m, nil
 	}
 
-	if matchKey(msg, keys.Enter) {
-		// Placeholder for item detail - screens will override
+	if key.Matches(msg, m.keys.Enter) {
 		return *m, nil
 	}
 
 	return *m, nil
 }
 
-// handleNodeUpdate stores node state from watcher (no computation here)
+// handleNodeUpdate stores node state from watcher
 func (m *Model) handleNodeUpdate(node types.NodeState) {
 	if node.Deleted {
 		delete(m.nodes, node.Name)
@@ -355,23 +324,20 @@ func (m *Model) handlePodUpdate(pod types.PodState) {
 
 // handleBlockerUpdate adds or removes blockers
 func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
-	// Generate key for deduplication
-	key := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name
+	blockerKey := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name
 
 	if blocker.Cleared {
-		// Remove blocker
 		for i, b := range m.blockers {
-			bKey := string(b.Type) + "/" + b.Namespace + "/" + b.Name
-			if bKey == key {
+			key := string(b.Type) + "/" + b.Namespace + "/" + b.Name
+			if key == blockerKey {
 				m.blockers = append(m.blockers[:i], m.blockers[i+1:]...)
 				return
 			}
 		}
 	} else {
-		// Add or update blocker
 		for i, b := range m.blockers {
-			bKey := string(b.Type) + "/" + b.Namespace + "/" + b.Name
-			if bKey == key {
+			key := string(b.Type) + "/" + b.Namespace + "/" + b.Name
+			if key == blockerKey {
 				m.blockers[i] = blocker
 				return
 			}
@@ -380,7 +346,7 @@ func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
 	}
 }
 
-// handleEvent adds event to display list (no state changes)
+// handleEvent adds event to display list
 func (m *Model) handleEvent(e types.Event) {
 	m.eventCount++
 
@@ -389,7 +355,6 @@ func (m *Model) handleEvent(e types.Event) {
 		m.events = m.events[len(m.events)-maxEvents:]
 	}
 
-	// Handle migration events
 	if e.Type == types.EventMigration {
 		m.migrations = append(m.migrations, types.Migration{
 			NewPod:    e.PodName,
@@ -403,13 +368,8 @@ func (m *Model) handleEvent(e types.Event) {
 	}
 }
 
-func (m *Model) spinner() string {
-	return spinnerFrames[m.spinnerFrame]
-}
-
 // handleMouse handles mouse events for scrolling
 func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
-	// Only handle scroll on list screens
 	switch m.screen {
 	case ScreenNodes, ScreenDrains, ScreenPods, ScreenBlockers, ScreenEvents:
 		switch msg.Button {
@@ -426,7 +386,6 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 	case ScreenOverview:
-		// Scroll through nodes in selected stage
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			if m.selectedNode > 0 {
@@ -450,7 +409,7 @@ func (m *Model) currentListCount() int {
 	case ScreenNodes:
 		return len(m.nodes)
 	case ScreenDrains:
-		return len(m.nodesByStage[types.StageCordoned]) + len(m.nodesByStage[types.StageDraining])
+		return len(m.getDrainNodes())
 	case ScreenPods:
 		return m.filteredPodCount()
 	case ScreenBlockers:

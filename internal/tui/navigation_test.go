@@ -8,22 +8,28 @@ import (
 )
 
 // mockChannels creates closed channels for testing
-func mockChannels() (<-chan types.Event, <-chan types.NodeState) {
+func mockChannels() (<-chan types.Event, <-chan types.NodeState, <-chan types.PodState, <-chan types.Blocker) {
 	eventCh := make(chan types.Event)
 	nodeCh := make(chan types.NodeState)
+	podCh := make(chan types.PodState)
+	blockerCh := make(chan types.Blocker)
 	close(eventCh)
 	close(nodeCh)
-	return eventCh, nodeCh
+	close(podCh)
+	close(blockerCh)
+	return eventCh, nodeCh, podCh, blockerCh
 }
 
 func TestNewModel(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
 	cfg := Config{
 		Context:       "test-context",
 		ServerVersion: "v1.28.0",
 		TargetVersion: "v1.29.0",
 		EventCh:       eventCh,
 		NodeStateCh:   nodeCh,
+		PodStateCh:    podCh,
+		BlockerCh:     blockerCh,
 	}
 
 	m := New(cfg)
@@ -37,8 +43,8 @@ func TestNewModel(t *testing.T) {
 }
 
 func TestScreenNavigation(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
-	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh})
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
+	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	tests := []struct {
 		key      string
@@ -65,8 +71,8 @@ func TestScreenNavigation(t *testing.T) {
 }
 
 func TestHelpOverlayToggle(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
-	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh})
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
+	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	// Press ? to open help
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")}
@@ -87,8 +93,8 @@ func TestHelpOverlayToggle(t *testing.T) {
 }
 
 func TestEscapeReturnsToOverview(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
-	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh})
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
+	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	// Navigate to Nodes screen
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")}
@@ -110,8 +116,8 @@ func TestEscapeReturnsToOverview(t *testing.T) {
 }
 
 func TestQuitFromNonOverviewReturnsToOverview(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
-	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh})
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
+	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	// Navigate to Stats screen
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")}
@@ -135,8 +141,8 @@ func TestQuitFromNonOverviewReturnsToOverview(t *testing.T) {
 }
 
 func TestListNavigation(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
-	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh})
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
+	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	// Add some test nodes
 	m.nodes = map[string]types.NodeState{
@@ -151,7 +157,6 @@ func TestListNavigation(t *testing.T) {
 	newModel, _ := m.Update(msg)
 	m = newModel.(Model)
 
-	// Initial listIndex should be 0
 	if m.listIndex != 0 {
 		t.Errorf("expected listIndex 0, got %d", m.listIndex)
 	}
@@ -185,8 +190,8 @@ func TestListNavigation(t *testing.T) {
 }
 
 func TestScreenName(t *testing.T) {
-	eventCh, nodeCh := mockChannels()
-	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh})
+	eventCh, nodeCh, podCh, blockerCh := mockChannels()
+	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	tests := []struct {
 		screen   Screen

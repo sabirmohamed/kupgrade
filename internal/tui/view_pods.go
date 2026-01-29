@@ -2,10 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
@@ -15,37 +15,12 @@ func (m Model) renderPodsScreen() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 
-	// Get nodes in upgrade pipeline (CORDONED, DRAINING, UPGRADING)
-	upgradeNodes := make(map[string]bool)
-	for _, name := range m.nodesByStage[types.StageCordoned] {
-		upgradeNodes[name] = true
-	}
-	for _, name := range m.nodesByStage[types.StageDraining] {
-		upgradeNodes[name] = true
-	}
-	for _, name := range m.nodesByStage[types.StageUpgrading] {
-		upgradeNodes[name] = true
-	}
+	upgradeCount := len(m.nodesByStage[types.StageCordoned]) +
+		len(m.nodesByStage[types.StageDraining]) +
+		len(m.nodesByStage[types.StageUpgrading])
+	showAll := upgradeCount == 0
 
-	// Collect pods on upgrade nodes (or all if no nodes upgrading)
-	var podList []types.PodState
-	showAll := len(upgradeNodes) == 0
-	for _, pod := range m.pods {
-		if showAll || upgradeNodes[pod.NodeName] {
-			podList = append(podList, pod)
-		}
-	}
-
-	// Sort by node, then namespace, then name
-	sort.Slice(podList, func(i, j int) bool {
-		if podList[i].NodeName != podList[j].NodeName {
-			return podList[i].NodeName < podList[j].NodeName
-		}
-		if podList[i].Namespace != podList[j].Namespace {
-			return podList[i].Namespace < podList[j].Namespace
-		}
-		return podList[i].Name < podList[j].Name
-	})
+	podList := m.getFilteredPodList()
 
 	if len(podList) == 0 {
 		if showAll {
@@ -56,170 +31,150 @@ func (m Model) renderPodsScreen() string {
 			b.WriteString(footerDescStyle.Render("  (showing pods on CORDONED/DRAINING/UPGRADING nodes only)"))
 		}
 	} else {
-		b.WriteString(m.renderPodTable(podList, showAll))
+		total := len(podList)
+		filterNote := ""
+		if !showAll {
+			filterNote = " (upgrading nodes)"
+		}
+		b.WriteString(fmt.Sprintf("  pods(%d)%s\n", total, filterNote))
+		b.WriteString(m.renderPodsTable(podList))
 	}
 
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
 
 	return m.placeContent(b.String())
 }
 
-// renderPodTable renders the pod table
-func (m Model) renderPodTable(podList []types.PodState, showAll bool) string {
-	var b strings.Builder
+// nodeGroupIndex maps each pod to its node group for separator rendering.
+// Returns a parallel slice of booleans: true if this pod is the first in a new node group.
+func nodeGroupStarts(podList []types.PodState) []bool {
+	starts := make([]bool, len(podList))
+	for i, pod := range podList {
+		if i == 0 || pod.NodeName != podList[i-1].NodeName {
+			starts[i] = true
+		}
+	}
+	return starts
+}
 
-	// Calculate responsive column widths
-	availWidth := m.width - 4
-	if availWidth < 120 {
-		availWidth = 120
-	}
+// renderPodsTable renders the pods table using lipgloss/table with per-cell coloring
+func (m Model) renderPodsTable(podList []types.PodState) string {
+	groupStarts := nodeGroupStarts(podList)
 
-	fixedWidth := 57
-	varWidth := availWidth - fixedWidth
-	nsWidth := varWidth * 15 / 100
-	nameWidth := varWidth * 40 / 100
-	nodeWidth := varWidth * 45 / 100
-
-	// Min/max widths
-	if nsWidth < 12 {
-		nsWidth = 12
-	}
-	if nameWidth < 30 {
-		nameWidth = 30
-	}
-	if nodeWidth < 25 {
-		nodeWidth = 25
-	}
-	if nsWidth > 15 {
-		nsWidth = 15
-	}
-	if nameWidth > 55 {
-		nameWidth = 55
-	}
-	if nodeWidth > 40 {
-		nodeWidth = 40
+	rows := make([][]string, len(podList))
+	for i, pod := range podList {
+		rows[i] = buildPodRow(pod)
 	}
 
-	// Calculate visible rows
 	visibleRows := m.height - 10
 	if visibleRows < 5 {
 		visibleRows = 5
 	}
+	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(podList))
 
-	scrollOffset := 0
-	if m.listIndex >= visibleRows {
-		scrollOffset = m.listIndex - visibleRows + 1
+	tableWidth := m.width - 2
+	if tableWidth < 120 {
+		tableWidth = 120
 	}
 
-	total := len(podList)
-	filterNote := ""
-	if !showAll {
-		filterNote = " (upgrading nodes)"
-	}
-	scrollInfo := ""
-	if total > visibleRows {
-		scrollInfo = fmt.Sprintf(" [%d-%d of %d]", scrollOffset+1, min(scrollOffset+visibleRows, total), total)
-	}
-	b.WriteString(fmt.Sprintf("  pods(%d)%s%s\n", total, filterNote, scrollInfo))
-
-	// Table header
-	headerFmt := fmt.Sprintf("  %%-%ds %%-%ds %%5s %%-16s %%-10s %%-5s %%-12s %%-%ds %%5s",
-		nsWidth, nameWidth, nodeWidth)
-	header := fmt.Sprintf(headerFmt,
-		"NAMESPACE", "NAME", "READY", "STATUS", "RESTARTS", "PROBE", "OWNER", "NODE", "AGE")
-	b.WriteString(panelTitleStyle.Render(header))
-	b.WriteString("\n")
-
-	// Separator
-	sepLen := nsWidth + nameWidth + nodeWidth + 50
-	if sepLen > m.width-2 {
-		sepLen = m.width - 2
-	}
-	b.WriteString(footerDescStyle.Render("  " + strings.Repeat("─", sepLen)))
-	b.WriteString("\n")
-
-	endIdx := scrollOffset + visibleRows
-	if endIdx > len(podList) {
-		endIdx = len(podList)
-	}
-
-	prevNode := ""
-	for i := scrollOffset; i < endIdx; i++ {
-		pod := podList[i]
-
-		// Node group separator
-		if pod.NodeName != prevNode && prevNode != "" && i > scrollOffset {
-			b.WriteString(footerDescStyle.Render("  " + strings.Repeat("·", sepLen/2)))
-			b.WriteString("\n")
-		}
-		prevNode = pod.NodeName
-
-		b.WriteString(m.renderPodRow(pod, i, nsWidth, nameWidth, nodeWidth))
-	}
-
-	// Scroll indicator
-	if total > visibleRows {
-		b.WriteString("\n")
-		if scrollOffset > 0 {
-			b.WriteString(footerDescStyle.Render("  ↑ more above"))
-		}
-		if endIdx < total {
-			if scrollOffset > 0 {
-				b.WriteString(footerDescStyle.Render("  |  "))
-			} else {
-				b.WriteString(footerDescStyle.Render("  "))
+	t := table.New().
+		Headers("NAMESPACE", "NAME", "READY", "STATUS", "RESTARTS", "PROBE", "OWNER", "NODE", "AGE").
+		Rows(rows...).
+		Width(tableWidth).
+		Height(visibleRows).
+		Offset(scrollOffset).
+		Border(lipgloss.RoundedBorder()).
+		BorderColumn(false).
+		BorderRow(false).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderHeader(true).
+		BorderStyle(tableBorderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			style := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				style = style.Foreground(colorTextMuted).Bold(true)
+				// Right-align numeric header columns
+				switch col {
+				case 2, 4, 8: // READY, RESTARTS, AGE
+					style = style.Align(lipgloss.Right)
+				}
+				return style
 			}
-			b.WriteString(footerDescStyle.Render("↓ more below"))
-		}
+
+			actualIdx := row
+
+			// Alternating row backgrounds
+			if actualIdx%2 == 0 {
+				style = style.Background(colorBg)
+			} else {
+				style = style.Background(colorBgAlt)
+			}
+
+			// Node group separator: top border on first pod of new node group
+			if actualIdx < len(groupStarts) && groupStarts[actualIdx] && actualIdx > 0 {
+				style = style.BorderTop(true).
+					BorderStyle(lipgloss.NormalBorder()).
+					BorderForeground(colorBorderDim)
+			}
+
+			// Selected row highlight
+			if actualIdx == m.listIndex {
+				style = style.Background(colorSelected).Foreground(colorTextBold)
+			}
+
+			// Right-align numeric columns
+			switch col {
+			case 2, 4, 8: // READY, RESTARTS, AGE
+				style = style.Align(lipgloss.Right)
+			}
+
+			if actualIdx >= len(podList) {
+				return style
+			}
+			pod := podList[actualIdx]
+
+			// Per-cell coloring
+			switch col {
+			case 2: // READY
+				style = style.Foreground(readyColor(pod))
+			case 3: // STATUS
+				style = style.Foreground(statusColor(pod.Phase))
+			case 4: // RESTARTS
+				style = style.Foreground(restartColor(pod.Restarts))
+			case 5: // PROBE
+				style = style.Foreground(probeColor(pod))
+			case 6: // OWNER
+				if pod.OwnerKind == "DaemonSet" {
+					style = style.Foreground(colorYellow)
+				}
+			}
+
+			return style
+		})
+
+	rendered := t.String()
+
+	if len(podList) > visibleRows {
+		pos := fmt.Sprintf(" %d/%d", m.listIndex+1, len(podList))
+		rendered += "\n" + footerDescStyle.Render(pos)
 	}
 
-	return b.String()
+	return rendered
 }
 
-// renderPodRow renders a single pod row
-func (m Model) renderPodRow(pod types.PodState, idx, nsWidth, nameWidth, nodeWidth int) string {
-	var b strings.Builder
+// buildPodRow builds a table row for a pod (plain text, coloring via StyleFunc)
+func buildPodRow(pod types.PodState) []string {
+	namespace := truncateString(pod.Namespace, 15)
+	name := truncateString(pod.Name, 55)
 
-	cursor := "  "
-	if idx == m.listIndex {
-		cursor = "► "
-	}
-
-	namespace := truncateString(pod.Namespace, nsWidth)
-	name := truncateString(pod.Name, nameWidth)
-
-	// Ready containers
 	readyStr := fmt.Sprintf("%d/%d", pod.ReadyContainers, pod.TotalContainers)
-	readyStyle := successStyle
-	if pod.ReadyContainers < pod.TotalContainers {
-		readyStyle = warningStyle
-	}
-	if pod.ReadyContainers == 0 && pod.TotalContainers > 0 {
-		readyStyle = errorStyle
-	}
-
-	// Status
 	status := truncateString(pod.Phase, 16)
-	statusStyle := successStyle
-	switch {
-	case pod.Phase == "Running":
-		statusStyle = successStyle
-	case pod.Phase == "Pending":
-		statusStyle = warningStyle
-	case pod.Phase == "Succeeded" || pod.Phase == "Completed":
-		statusStyle = footerDescStyle
-	case pod.Phase == "CrashLoopBackOff" || pod.Phase == "ImagePullBackOff" ||
-		pod.Phase == "ErrImagePull" || pod.Phase == "Error" ||
-		pod.Phase == "Failed" || pod.Phase == "Unknown" ||
-		pod.Phase == "Terminating" || pod.Phase == "OOMKilled" ||
-		strings.HasPrefix(pod.Phase, "Init:"):
-		statusStyle = errorStyle
-	}
 
-	// Restarts
 	var restartStr string
-	restartStyle := footerDescStyle
 	if pod.Restarts == 0 {
 		restartStr = "0"
 	} else if pod.LastRestartAge != "" {
@@ -227,78 +182,115 @@ func (m Model) renderPodRow(pod types.PodState, idx, nsWidth, nameWidth, nodeWid
 	} else {
 		restartStr = fmt.Sprintf("%d", pod.Restarts)
 	}
-	if pod.Restarts > 5 {
-		restartStyle = errorStyle
-	} else if pod.Restarts > 0 {
-		restartStyle = warningStyle
-	}
 
-	// Probes
 	var rProbe, lProbe string
-	var rStyle, lStyle lipgloss.Style
-
 	if pod.HasReadiness {
 		if pod.ReadinessOK {
 			rProbe = "R✓"
-			rStyle = successStyle
 		} else {
 			rProbe = "R✗"
-			rStyle = errorStyle
 		}
 	} else {
 		rProbe = "··"
-		rStyle = footerDescStyle
 	}
-
 	if pod.HasLiveness {
 		if pod.LivenessOK {
 			lProbe = "L✓"
-			lStyle = successStyle
 		} else {
 			lProbe = "L✗"
-			lStyle = errorStyle
 		}
 	} else {
 		lProbe = "··"
-		lStyle = footerDescStyle
 	}
+	probeStr := rProbe + lProbe
 
-	// Owner
 	owner := truncateString(pod.OwnerKind, 12)
 	if owner == "" {
 		owner = "<none>"
 	}
-	ownerStyle := footerDescStyle
-	if pod.OwnerKind == "DaemonSet" {
-		ownerStyle = warningStyle
-	}
 
-	// Node name
-	nodeName := truncateString(pod.NodeName, nodeWidth)
+	nodeName := truncateString(pod.NodeName, 40)
 	if nodeName == "" {
 		nodeName = "<pending>"
 	}
 
-	// Build line
-	lineFmt := fmt.Sprintf("%%s%%-%ds %%-%ds ", nsWidth, nameWidth)
-	line := fmt.Sprintf(lineFmt, cursor, namespace, name)
-	if idx == m.listIndex {
-		b.WriteString(nodeNameStyle.Render(line))
-	} else {
-		b.WriteString(line)
+	return []string{
+		namespace,
+		name,
+		readyStr,
+		status,
+		restartStr,
+		probeStr,
+		owner,
+		nodeName,
+		pod.Age,
 	}
+}
 
-	b.WriteString(readyStyle.Render(fmt.Sprintf("%5s ", readyStr)))
-	b.WriteString(statusStyle.Render(fmt.Sprintf("%-16s ", status)))
-	b.WriteString(restartStyle.Render(fmt.Sprintf("%-10s ", restartStr)))
-	b.WriteString(rStyle.Render(rProbe))
-	b.WriteString(" ")
-	b.WriteString(lStyle.Render(lProbe))
-	b.WriteString(" ")
-	b.WriteString(ownerStyle.Render(fmt.Sprintf("%-12s ", owner)))
-	b.WriteString(footerDescStyle.Render(fmt.Sprintf("%-*s ", nodeWidth, nodeName)))
-	b.WriteString(footerDescStyle.Render(fmt.Sprintf("%5s", pod.Age)))
-	b.WriteString("\n")
+// statusColor returns foreground color for pod phase
+func statusColor(phase string) lipgloss.Color {
+	switch phase {
+	case "Running":
+		return colorComplete // green
+	case "Pending":
+		return colorCordoned // yellow
+	case "Completed", "Succeeded":
+		return colorTextMuted
+	case "CrashLoopBackOff", "Error", "Failed", "ImagePullBackOff", "ErrImagePull",
+		"OOMKilled", "RunContainerError", "CreateContainerError":
+		return colorError // red
+	case "Terminating":
+		return colorBrightYellow // orange
+	case "Unknown":
+		return colorBrightRed // bright red
+	default:
+		// Handle Init:* and PodInitializing prefixes
+		if strings.HasPrefix(phase, "Init:") || phase == "PodInitializing" {
+			return colorCyan // init state
+		}
+		return colorText
+	}
+}
 
-	return b.String()
+// readyColor returns foreground color based on container readiness
+func readyColor(pod types.PodState) lipgloss.Color {
+	if pod.TotalContainers == 0 {
+		return colorTextMuted
+	}
+	if pod.ReadyContainers == pod.TotalContainers {
+		return colorComplete // green
+	}
+	if pod.ReadyContainers == 0 {
+		return colorError // red
+	}
+	return colorCordoned // yellow - partial
+}
+
+// restartColor returns foreground color based on restart count
+func restartColor(restarts int) lipgloss.Color {
+	if restarts > 5 {
+		return colorError // red
+	}
+	if restarts > 0 {
+		return colorCordoned // yellow
+	}
+	return colorTextMuted
+}
+
+// probeColor returns foreground color based on probe status
+func probeColor(pod types.PodState) lipgloss.Color {
+	if !pod.HasReadiness && !pod.HasLiveness {
+		return colorTextMuted
+	}
+	allOK := true
+	if pod.HasReadiness && !pod.ReadinessOK {
+		allOK = false
+	}
+	if pod.HasLiveness && !pod.LivenessOK {
+		allOK = false
+	}
+	if allOK {
+		return colorComplete // green
+	}
+	return colorError // red
 }

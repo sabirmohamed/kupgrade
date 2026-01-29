@@ -9,10 +9,12 @@
 
 | Component | Technology | Version |
 |-----------|------------|---------|
-| Language | Go | 1.22+ |
+| Language | Go | 1.23+ |
 | CLI | Cobra | kubectl-compatible flags |
-| TUI | Bubble Tea | Elm architecture |
-| Styling | Lip Gloss | Tokyo Night theme |
+| TUI | Bubble Tea | v1.3+ Elm architecture |
+| Tables | lipgloss/table | Per-cell StyleFunc coloring |
+| Styling | Lip Gloss | v1.1+ Tokyo Night theme |
+| Terminal | termenv | v0.16+ forced TrueColor |
 | K8s Client | client-go | Informer-based |
 
 ---
@@ -37,7 +39,7 @@ Local copies in `style/go/`:
 
 ### File Organization
 
-- Files should be <300 lines, focused on single concept
+- Files should be <500 lines, focused on single concept (project guideline, not Go style guide - Google says "flexible" but avoid "thousands of lines")
 - View files split by screen: `view_overview.go`, `view_nodes.go`, etc.
 - Tests alongside code: `foo.go` → `foo_test.go`
 
@@ -125,7 +127,7 @@ All interfaces defined in consumer package. Implementations use compile-time che
 var _ EventEmitter = (*Manager)(nil)
 ```
 
-Full interface contracts in `docs/ARCHITECTURE.md` section 7.
+Full interface contracts in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` section 7.
 
 ---
 
@@ -139,7 +141,7 @@ Full interface contracts in `docs/ARCHITECTURE.md` section 7.
 | `Migration` | `pkg/types/migration.go` | Owner, FromNode, ToNode, OldPod, NewPod |
 | `Event` | `pkg/types/event.go` | Type, Severity, Message, Timestamp |
 
-Full type definitions in `docs/ARCHITECTURE.md` section 6.
+Full type definitions in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` section 6.
 
 ---
 
@@ -162,6 +164,42 @@ Model (state) → Update (reducer) → View (render)
 | `Enter` | Show details |
 | `?` | Help overlay |
 | `q` | Back/Quit |
+| `u/w/a` | Event filter: Upgrade/Warnings/All |
+| `g` | Toggle event aggregation |
+| `e` | Expand/collapse event group |
+
+### Table Rendering (lipgloss/table)
+
+Tables use `lipgloss/table` (NOT `bubbles/table`) for per-cell coloring via `StyleFunc`:
+
+```go
+table.New().
+    Headers(...).Rows(rows...).Width(w).
+    Height(visibleRows).Offset(scrollOffset).
+    Border(lipgloss.RoundedBorder()).BorderHeader(true).
+    StyleFunc(func(row, col int) lipgloss.Style { ... })
+```
+
+Key patterns:
+- **Cursor**: `listIndex` field + `handleListNavigation()` — NOT table.Model cursor
+- **Viewport**: `Height(visibleRows)` constrains rendered rows to terminal height — without it, all rows render and flood the terminal
+- **Scroll**: `calcScrollOffset()` + `Offset()` — render-time only
+- **Per-cell color**: StyleFunc closes over data slice, switches on col index
+- **Alternating rows**: `row%2` for `colorBg`/`colorBgAlt` backgrounds
+- **Numeric alignment**: `style.Align(lipgloss.Right)` for READY, RESTARTS, PODS, AGE
+- **Node group separators** (pods table): `nodeGroupStarts()` + `BorderTop(true)` in StyleFunc
+
+**CRITICAL**: StyleFunc `row` parameter is the **absolute data index** (starts at `Offset()`), NOT 0-based visible index. Never add scrollOffset to row — it's already included. Use `row` directly as the data index.
+
+Color functions (pure, tested): `statusColor()`, `readyColor()`, `restartColor()`, `probeColor()`
+
+### Color Profile
+
+`lipgloss.SetColorProfile(termenv.TrueColor)` is forced in `New()` (`internal/tui/model.go`). Bubble Tea owns stdout, causing termenv's auto-detection to fall back to Ascii. This ensures StyleFunc-based coloring works in modern terminals.
+
+### Known Terminal Issues
+
+- **Apple Terminal (Terminal.app)**: Scrolling does not work. Keyboard navigation and mouse wheel events may not propagate correctly. Colors degrade (256-color only, no TrueColor). Use Ghostty, iTerm2, Kitty, or Windows Terminal instead. Revisit if Apple Terminal support becomes a requirement.
 
 ### Color Theme
 
@@ -181,7 +219,7 @@ Tokyo Night palette defined in `internal/tui/styles.go` and `style/tui/tokyo-nig
 | ADR-006 | Single source of truth for stages | Prevents drift, TUI is display-only |
 | ADR-007 | Auto-detect target version | Infer from highest version, `--target-version` override |
 
-Full ADR details in `docs/ARCHITECTURE.md` section 12.
+Full ADR details in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` section 12.
 
 ---
 
@@ -192,6 +230,8 @@ Full ADR details in `docs/ARCHITECTURE.md` section 12.
 3. **No blocking channel operations** - Use ring buffer pattern
 4. **No `Get` prefix on getters** - `Version()` not `GetVersion()`
 5. **No magic numbers in views** - Extract to named constants
+6. **No `bubbles/table`** - Use `lipgloss/table` for per-cell coloring (bubbles/table corrupts ANSI via runewidth.Truncate)
+7. **No abbreviated variable names** - `blockerKey` not `bkey` (per Go style decisions)
 
 ---
 
@@ -217,3 +257,12 @@ When implementing changes:
 3. **Follow Google Go Style** - See `style/go/decisions.md` for specific rules
 4. **Run verification** - `go build ./...` and `go vet ./...` before completing
 5. **Keep TUI dumb** - Any logic changes go in watcher, not TUI
+
+### After Each Feature (Winston's Rule)
+
+After completing any feature implementation:
+
+1. **Update ARCHITECTURE.md** - See `_bmad-output/planning-artifacts/kupgrade/`
+2. **Update ROADMAP.md** - See `_bmad-output/planning-artifacts/kupgrade/`
+3. **Update this file** - If new patterns, types, or rules emerge
+4. **Keep docs current** - Outdated docs mislead future AI agents

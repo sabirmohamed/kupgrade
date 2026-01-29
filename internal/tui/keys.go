@@ -1,72 +1,116 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 type keyMap struct {
-	Quit   []string
-	Left   []string
-	Right  []string
-	Up     []string
-	Down   []string
-	Enter  []string
-	Escape []string
-	Help   []string
-	// Screen navigation (0-6)
-	Screen0 []string
-	Screen1 []string
-	Screen2 []string
-	Screen3 []string
-	Screen4 []string
-	Screen5 []string
-	Screen6 []string
+	Quit   key.Binding
+	Left   key.Binding
+	Right  key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Enter  key.Binding
+	Escape key.Binding
+	Help   key.Binding
 	// List navigation
-	Top      []string
-	Bottom   []string
-	PageUp   []string
-	PageDown []string
+	Top      key.Binding
+	Bottom   key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
 	// Event filtering
-	EventUpgrade   []string
-	EventWarnings  []string
-	EventAll       []string
-	EventAggregate []string
-	EventExpand    []string
+	EventUpgrade   key.Binding
+	EventWarnings  key.Binding
+	EventAll       key.Binding
+	EventAggregate key.Binding
+	EventExpand    key.Binding
 }
 
-var keys = keyMap{
-	Quit:    []string{"q", "ctrl+c"},
-	Left:    []string{"left", "h"},
-	Right:   []string{"right", "l"},
-	Up:      []string{"up", "k"},
-	Down:    []string{"down", "j"},
-	Enter:   []string{"enter"},
-	Escape:  []string{"esc"},
-	Help:    []string{"?"},
-	Screen0: []string{"0"},
-	Screen1: []string{"1"},
-	Screen2: []string{"2"},
-	Screen3: []string{"3"},
-	Screen4: []string{"4"},
-	Screen5: []string{"5"},
-	Screen6: []string{"6"},
-	Top:      []string{"g"},
-	Bottom:   []string{"G"},
-	PageUp:   []string{"ctrl+u"},
-	PageDown: []string{"ctrl+d"},
-	// Event filtering
-	EventUpgrade:   []string{"u"},
-	EventWarnings:  []string{"w"},
-	EventAll:       []string{"a"},
-	EventAggregate: []string{"g"},
-	EventExpand:    []string{"e"},
+// ShortHelp returns key bindings for the short help view (footer).
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Help, k.Quit}
 }
 
-func matchKey(msg tea.KeyMsg, bindings []string) bool {
-	for _, b := range bindings {
-		if msg.String() == b {
-			return true
-		}
+// FullHelp returns key bindings for the full help view (overlay).
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.Left, k.Right},
+		{k.Enter, k.PageUp, k.PageDown},
+		{k.Top, k.Bottom},
+		{k.Help, k.Escape, k.Quit},
 	}
-	return false
+}
+
+var defaultKeys = keyMap{
+	Quit: key.NewBinding(
+		key.WithKeys("q", "ctrl+c"),
+		key.WithHelp("q", "quit"),
+	),
+	Left: key.NewBinding(
+		key.WithKeys("left", "h"),
+		key.WithHelp("←/h", "prev stage"),
+	),
+	Right: key.NewBinding(
+		key.WithKeys("right", "l"),
+		key.WithHelp("→/l", "next stage"),
+	),
+	Up: key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "up"),
+	),
+	Down: key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "down"),
+	),
+	Enter: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("⏎", "details"),
+	),
+	Escape: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "back"),
+	),
+	Help: key.NewBinding(
+		key.WithKeys("?"),
+		key.WithHelp("?", "help"),
+	),
+	Top: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "top"),
+	),
+	Bottom: key.NewBinding(
+		key.WithKeys("G"),
+		key.WithHelp("G", "bottom"),
+	),
+	PageUp: key.NewBinding(
+		key.WithKeys("ctrl+u"),
+		key.WithHelp("ctrl+u", "page up"),
+	),
+	PageDown: key.NewBinding(
+		key.WithKeys("ctrl+d"),
+		key.WithHelp("ctrl+d", "page down"),
+	),
+	EventUpgrade: key.NewBinding(
+		key.WithKeys("u"),
+		key.WithHelp("u", "upgrade"),
+	),
+	EventWarnings: key.NewBinding(
+		key.WithKeys("w"),
+		key.WithHelp("w", "warnings"),
+	),
+	EventAll: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "all"),
+	),
+	EventAggregate: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "group"),
+	),
+	EventExpand: key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "expand"),
+	),
 }
 
 // screenFromKey returns the screen number if a screen key was pressed, -1 otherwise

@@ -154,8 +154,6 @@ var (
 	nodeVersionStyle = lipgloss.NewStyle().
 				Foreground(colorTextMuted)
 
-	progressBarFull  = "█"
-	progressBarEmpty = "░"
 )
 
 // Panel styles
@@ -261,6 +259,10 @@ var (
 
 	rowOddStyle = lipgloss.NewStyle().
 			Background(colorBgAlt)
+
+	// lipgloss/table border style
+	tableBorderStyle = lipgloss.NewStyle().
+				Foreground(colorBorderDim)
 )
 
 // Layout helpers

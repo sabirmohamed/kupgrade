@@ -94,7 +94,7 @@ func (m Model) renderDrainProgressSection() string {
 		node := m.nodes[nodeName]
 
 		// Title with spinner
-		title := fmt.Sprintf("%s DRAINING: %s", m.spinner(), strings.ToUpper(nodeName))
+		title := fmt.Sprintf("%s DRAINING: %s", m.spinner.View(), strings.ToUpper(nodeName))
 		b.WriteString(warningStyle.Render(title))
 		b.WriteString("\n")
 
@@ -108,14 +108,8 @@ func (m Model) renderDrainProgressSection() string {
 			total = node.PodCount
 		}
 
-		// Build progress bar (20 chars wide)
-		barWidth := 20
-		filled := (node.DrainProgress * barWidth) / 100
-		if filled > barWidth {
-			filled = barWidth
-		}
-		empty := barWidth - filled
-		bar := strings.Repeat(progressBarFull, filled) + strings.Repeat(progressBarEmpty, empty)
+		// Progress bar
+		bar := m.smallProg.ViewAs(float64(node.DrainProgress) / 100.0)
 
 		// Elapsed time
 		elapsed := ""
@@ -130,7 +124,7 @@ func (m Model) renderDrainProgressSection() string {
 			}
 		}
 
-		progressLine := fmt.Sprintf("%s  %d/%d pods evicted%s", progressStyle.Render(bar), evicted, total, footerDescStyle.Render(elapsed))
+		progressLine := fmt.Sprintf("%s  %d/%d pods evicted%s", bar, evicted, total, footerDescStyle.Render(elapsed))
 		b.WriteString(progressLine)
 		b.WriteString("\n")
 

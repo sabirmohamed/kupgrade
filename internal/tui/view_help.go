@@ -5,24 +5,12 @@ import (
 	"strings"
 )
 
-// renderHelpOverlay renders the keyboard shortcuts overlay
+// renderHelpOverlay renders the keyboard shortcuts overlay using bubbles/help
 func (m Model) renderHelpOverlay() string {
 	title := overlayTitleStyle.Render("Keyboard Shortcuts")
+	helpContent := m.help.FullHelpView(m.keys.FullHelp())
 
-	help := []string{
-		title,
-		"",
-		footerKeyStyle.Render("←/h") + "     Previous stage",
-		footerKeyStyle.Render("→/l") + "     Next stage",
-		footerKeyStyle.Render("↑/k") + "     Previous node",
-		footerKeyStyle.Render("↓/j") + "     Next node",
-		footerKeyStyle.Render("enter") + "   Node details",
-		footerKeyStyle.Render("?") + "       Toggle help",
-		footerKeyStyle.Render("esc") + "     Close overlay",
-		footerKeyStyle.Render("q") + "       Quit",
-	}
-
-	content := strings.Join(help, "\n")
+	content := title + "\n\n" + helpContent
 	return overlayStyle.Render(content)
 }
 
