@@ -297,8 +297,3 @@ func (m Model) renderEventsSection() string {
 
 	return b.String()
 }
-
-// renderMainContent is kept for legacy column layout compatibility
-func (m Model) renderMainContent() string {
-	return m.renderNodeColumns()
-}

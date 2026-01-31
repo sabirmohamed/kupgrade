@@ -137,19 +137,19 @@ func (m *Model) handleOverlayKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return *m, nil
 		}
 		if key.Matches(msg, m.keys.Down) {
-			m.detailViewport.LineDown(1)
+			m.detailViewport.ScrollDown(1)
 			return *m, nil
 		}
 		if key.Matches(msg, m.keys.Up) {
-			m.detailViewport.LineUp(1)
+			m.detailViewport.ScrollUp(1)
 			return *m, nil
 		}
 		if key.Matches(msg, m.keys.PageDown) {
-			m.detailViewport.HalfViewDown()
+			m.detailViewport.HalfPageDown()
 			return *m, nil
 		}
 		if key.Matches(msg, m.keys.PageUp) {
-			m.detailViewport.HalfViewUp()
+			m.detailViewport.HalfPageUp()
 			return *m, nil
 		}
 		if key.Matches(msg, m.keys.Top) {
@@ -451,8 +451,6 @@ func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
 
 // handleEvent adds event to display list
 func (m *Model) handleEvent(e types.Event) {
-	m.eventCount++
-
 	m.events = append(m.events, e)
 	if len(m.events) > maxEvents {
 		m.events = m.events[len(m.events)-maxEvents:]

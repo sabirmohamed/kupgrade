@@ -102,7 +102,6 @@ type Model struct {
 	events       []types.Event
 	migrations   []types.Migration
 	blockers     []types.Blocker
-	eventCount   int
 
 	// Detail overlay state
 	detailViewport viewport.Model
@@ -294,23 +293,6 @@ func (m *Model) stageAtIndex(idx int) types.NodeStage {
 func (m *Model) nodesInSelectedStage() []string {
 	stage := m.stageAtIndex(m.selectedStage)
 	return m.nodesByStage[stage]
-}
-
-func (m *Model) selectedNodeName() string {
-	allNodes := m.getSortedNodeList()
-	if m.listIndex < 0 || m.listIndex >= len(allNodes) {
-		return ""
-	}
-	return allNodes[m.listIndex]
-}
-
-func (m *Model) selectedNodeState() (types.NodeState, bool) {
-	name := m.selectedNodeName()
-	if name == "" {
-		return types.NodeState{}, false
-	}
-	state, ok := m.nodes[name]
-	return state, ok
 }
 
 // getSortedNodeList returns nodes sorted by stage priority (action-needed first), then name

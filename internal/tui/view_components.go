@@ -57,12 +57,6 @@ func (m Model) renderHeader() string {
 		titleDisplay, context, versionDisplay, progress, percent, timeDisplay)
 }
 
-// renderSmallProgressBar renders a small progress bar for node cards
-func (m Model) renderSmallProgressBar(percent int) string {
-	bar := m.smallProg.ViewAs(float64(percent) / 100.0)
-	return fmt.Sprintf("%s %d%%", bar, percent)
-}
-
 // renderPipelineRow renders compact stage counts with arrows
 func (m Model) renderPipelineRow() string {
 	stages := types.AllStages()
@@ -166,51 +160,6 @@ func (m Model) mainWidth() int {
 	return m.width
 }
 
-// nodeCardWidth calculates card width based on terminal width
-func (m Model) nodeCardWidth() int {
-	if m.width <= 0 {
-		return nodeCardMinWidth + 4
-	}
-	gapTotal := (stageCount - 1) * nodeCardGapWidth
-	available := m.width - gapTotal
-	cardWidth := available / stageCount
-	if cardWidth < nodeCardMinWidth {
-		cardWidth = nodeCardMinWidth
-	}
-	if cardWidth > nodeCardMaxWidth {
-		cardWidth = nodeCardMaxWidth
-	}
-	return cardWidth
-}
-
-// panelWidths calculates widths for bottom panels
-func (m Model) panelWidths() (blockers, migrations, events int) {
-	if m.width <= 0 {
-		return 30, 30, 50
-	}
-
-	available := m.width - 8
-
-	if len(m.blockers) > 0 {
-		blockers = available * 25 / 100
-		migrations = available * 30 / 100
-		events = available - blockers - migrations
-	} else {
-		blockers = 0
-		migrations = available * 35 / 100
-		events = available - migrations
-	}
-
-	if migrations < 25 {
-		migrations = 25
-	}
-	if events < 40 {
-		events = 40
-	}
-
-	return blockers, migrations, events
-}
-
 // getFilteredPodList returns pods filtered to upgrading nodes (or all if none upgrading)
 func (m *Model) getFilteredPodList() []types.PodState {
 	upgradeNodes := make(map[string]bool)
@@ -248,12 +197,8 @@ func (m *Model) getFilteredPodList() []types.PodState {
 // getDrainNodes returns sorted list of nodes in drain pipeline
 func (m *Model) getDrainNodes() []string {
 	var drainNodes []string
-	for _, name := range m.nodesByStage[types.StageCordoned] {
-		drainNodes = append(drainNodes, name)
-	}
-	for _, name := range m.nodesByStage[types.StageDraining] {
-		drainNodes = append(drainNodes, name)
-	}
+	drainNodes = append(drainNodes, m.nodesByStage[types.StageCordoned]...)
+	drainNodes = append(drainNodes, m.nodesByStage[types.StageDraining]...)
 	sort.Strings(drainNodes)
 	return drainNodes
 }

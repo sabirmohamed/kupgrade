@@ -20,9 +20,6 @@ type AggregatedEvent struct {
 	SampleEvent types.Event // Representative event for details
 }
 
-// aggregationWindow defines how close events must be to aggregate (30 seconds)
-const aggregationWindow = 30 * time.Second
-
 // aggregateEvents collapses similar events into aggregated groups
 func aggregateEvents(events []types.Event) []AggregatedEvent {
 	if len(events) == 0 {
@@ -137,7 +134,7 @@ func extractResource(e types.Event) string {
 // isAlphanumeric checks if string is alphanumeric
 func isAlphanumeric(s string) bool {
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
 			return false
 		}
 	}

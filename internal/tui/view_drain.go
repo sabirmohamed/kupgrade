@@ -24,6 +24,10 @@ func (m Model) renderDrainsScreen() string {
 		b.WriteString(m.renderDrainsTable(drainNodes))
 	}
 
+	// Migrations section
+	b.WriteString("\n")
+	b.WriteString(m.renderMigrationsSection())
+
 	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
 
@@ -154,6 +158,45 @@ func buildDrainRow(node types.NodeState) []string {
 		fmt.Sprintf("%d", node.PodCount),
 		status,
 	}
+}
+
+// renderMigrationsSection shows recent pod migrations during drains
+func (m Model) renderMigrationsSection() string {
+	var b strings.Builder
+
+	title := panelTitleStyle.Render(fmt.Sprintf("%s RESCHEDULED (%d)", migrateIcon, len(m.migrations)))
+	b.WriteString(title)
+	b.WriteString("\n")
+
+	if len(m.migrations) == 0 {
+		b.WriteString(footerDescStyle.Render("  No pod moves yet"))
+		return b.String()
+	}
+
+	// Show most recent migrations (up to 8 for the section)
+	maxDisplay := 8
+	start := 0
+	if len(m.migrations) > maxDisplay {
+		start = len(m.migrations) - maxDisplay
+	}
+
+	for i := len(m.migrations) - 1; i >= start; i-- {
+		mig := m.migrations[i]
+		icon := migrateIcon
+		if mig.Complete {
+			icon = checkIcon
+		}
+		ts := timestampStyle.Render(mig.Timestamp.Format("15:04:05"))
+		line := fmt.Sprintf("  %s %s %s/%s → %s", ts, icon, mig.Namespace, truncateString(mig.NewPod, 40), mig.ToNode)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	if len(m.migrations) > maxDisplay {
+		b.WriteString(footerDescStyle.Render(fmt.Sprintf("  ... %d more", len(m.migrations)-maxDisplay)))
+	}
+
+	return b.String()
 }
 
 // plainProgressBar renders a text-only progress bar safe for use in table cells

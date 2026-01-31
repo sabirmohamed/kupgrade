@@ -162,55 +162,6 @@ func (m Model) renderEventsFooter() string {
 	return footerDescStyle.Render("  " + countInfo + "  •  ↑↓ navigate  •  d describe  •  q back")
 }
 
-// renderEventsPanel renders events in bottom panel (legacy layout)
-func (m Model) renderEventsPanel(width int) string {
-	aggLabel := ""
-	if m.eventAggregated {
-		aggLabel = " grouped"
-	}
-	filterLabel := fmt.Sprintf("• EVENTS [%s%s]", m.eventFilterName(), aggLabel)
-	title := panelTitleStyle.Render(filterLabel)
-	var lines []string
-	lines = append(lines, title)
-
-	maxMsgLen := width - eventPaddingTotal
-	if maxMsgLen < eventMinMessageWidth {
-		maxMsgLen = eventMinMessageWidth
-	}
-
-	events := m.filteredEvents()
-
-	if len(events) == 0 {
-		lines = append(lines, footerDescStyle.Render("No events matching filter"))
-	} else if m.eventAggregated {
-		// Aggregated view in panel
-		aggregated := aggregateEvents(events)
-		for _, ag := range aggregated {
-			ts := timestampStyle.Render(ag.Timestamp.Format("15:04:05"))
-			icon := m.severityIcon(ag.Severity)
-			msg := ag.Format(icon)
-			if len(msg) > maxMsgLen {
-				msg = msg[:maxMsgLen] + "..."
-			}
-			lines = append(lines, fmt.Sprintf("%s %s %s", ts, icon, msg))
-		}
-	} else {
-		// Raw view
-		for _, e := range events {
-			ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
-			icon := m.severityIcon(e.Severity)
-			msg := e.Message
-			if len(msg) > maxMsgLen {
-				msg = msg[:maxMsgLen] + "..."
-			}
-			lines = append(lines, fmt.Sprintf("%s %s %s", ts, icon, msg))
-		}
-	}
-
-	content := strings.Join(lines, "\n")
-	return panelStyle.Width(width).Render(content)
-}
-
 // truncateMessage smartly truncates a message, preserving important parts
 // Keeps: [Reason] prefix, shortened resource name, error type at end
 func truncateMessage(msg string, maxLen int) string {

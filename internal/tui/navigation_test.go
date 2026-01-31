@@ -133,10 +133,9 @@ func TestQuitFromNonOverviewReturnsToOverview(t *testing.T) {
 		t.Errorf("expected ScreenOverview after q from Stats, got %d", m.screen)
 	}
 
-	// cmd should not be tea.Quit
+	// cmd should not be tea.Quit - verify it's nil (no quit command issued)
 	if cmd != nil {
-		// Check if it's a quit command by running it
-		// For simplicity, we just check it's nil (no quit)
+		t.Errorf("expected nil cmd when pressing q from non-Overview screen, got non-nil")
 	}
 }
 

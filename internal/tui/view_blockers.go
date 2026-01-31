@@ -46,27 +46,3 @@ func (m Model) renderBlockersScreen() string {
 
 	return m.placeContent(b.String())
 }
-
-// renderBlockersPanel renders blockers in bottom panel (legacy layout)
-func (m Model) renderBlockersPanel(width int) string {
-	title := panelTitleError.Render(fmt.Sprintf("⚠ BLOCKERS (%d)", len(m.blockers)))
-	var lines []string
-	lines = append(lines, title)
-
-	for _, blocker := range m.blockers {
-		name := blocker.Name
-		if blocker.Namespace != "" {
-			name = blocker.Namespace + "/" + blocker.Name
-		}
-		line := fmt.Sprintf("%s: %s", blocker.Type, name)
-		lines = append(lines, errorStyle.Render(line))
-
-		if blocker.Detail != "" {
-			detail := "  └─ " + blocker.Detail
-			lines = append(lines, warningStyle.Render(truncateString(detail, width-4)))
-		}
-	}
-
-	content := strings.Join(lines, "\n")
-	return panelStyle.Width(width).MarginRight(2).Render(content)
-}

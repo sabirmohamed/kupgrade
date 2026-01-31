@@ -284,13 +284,7 @@ func probeColor(pod types.PodState) lipgloss.Color {
 	if !pod.HasReadiness && !pod.HasLiveness {
 		return colorTextMuted
 	}
-	allOK := true
-	if pod.HasReadiness && !pod.ReadinessOK {
-		allOK = false
-	}
-	if pod.HasLiveness && !pod.LivenessOK {
-		allOK = false
-	}
+	allOK := (!pod.HasReadiness || pod.ReadinessOK) && (!pod.HasLiveness || pod.LivenessOK)
 	if allOK {
 		return colorComplete // green
 	}
