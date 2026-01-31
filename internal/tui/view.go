@@ -34,8 +34,6 @@ func (m Model) View() string {
 		return m.renderBlockersScreen()
 	case ScreenEvents:
 		return m.renderEventsScreen()
-	case ScreenStats:
-		return m.renderStatsScreen()
 	default:
 		return m.renderOverview()
 	}

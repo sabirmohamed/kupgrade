@@ -15,28 +15,31 @@ func (m Model) renderPodsScreen() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 
-	upgradeCount := len(m.nodesByStage[types.StageCordoned]) +
-		len(m.nodesByStage[types.StageDraining]) +
-		len(m.nodesByStage[types.StageUpgrading])
-	showAll := upgradeCount == 0
+	upgradeActive := len(m.nodesByStage[types.StageCordoned])+
+		len(m.nodesByStage[types.StageDraining])+
+		len(m.nodesByStage[types.StageUpgrading]) > 0
 
 	podList := m.getFilteredPodList()
 
 	if len(podList) == 0 {
-		if showAll {
+		if !upgradeActive {
 			b.WriteString(footerDescStyle.Render("  No pods found"))
 		} else {
-			b.WriteString(footerDescStyle.Render("  No pods on upgrading nodes"))
+			b.WriteString(footerDescStyle.Render(fmt.Sprintf("  No pods on %s", m.podFilterLabel())))
 			b.WriteString("\n")
-			b.WriteString(footerDescStyle.Render("  (showing pods on CORDONED/DRAINING/UPGRADING nodes only)"))
+			b.WriteString(footerDescStyle.Render("  Press 'a' to cycle filter: disrupting → rescheduled → all"))
 		}
 	} else {
 		total := len(podList)
 		filterNote := ""
-		if !showAll {
-			filterNote = " (upgrading nodes)"
+		if upgradeActive {
+			filterNote = fmt.Sprintf(" (%s)", m.podFilterLabel())
 		}
-		b.WriteString(fmt.Sprintf("  pods(%d)%s\n", total, filterNote))
+		toggleHint := ""
+		if upgradeActive {
+			toggleHint = "  " + footerDescStyle.Render("a cycle filter")
+		}
+		b.WriteString(fmt.Sprintf("  pods(%d)%s%s\n", total, filterNote, toggleHint))
 		b.WriteString(m.renderPodsTable(podList))
 	}
 

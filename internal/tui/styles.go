@@ -60,6 +60,9 @@ var (
 	versionStyle = lipgloss.NewStyle().
 			Foreground(colorWarning)
 
+	versionCompleteStyle = lipgloss.NewStyle().
+				Foreground(colorComplete)
+
 	timeStyle = lipgloss.NewStyle().
 			Foreground(colorTextMuted)
 )

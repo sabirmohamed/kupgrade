@@ -40,6 +40,7 @@ func newPopulatedModel() Model {
 		"node-complete-1":  {Name: "node-complete-1", Stage: types.StageComplete, Version: "v1.29.0", PodCount: 8, Ready: true, Age: "30d"},
 	}
 	m.rebuildNodesByStage()
+	m.recomputeVersionRange()
 
 	// Pods
 	m.pods = map[string]types.PodState{
@@ -82,7 +83,6 @@ func TestViewSmoke_AllScreens(t *testing.T) {
 		{"Pods", ScreenPods},
 		{"Blockers", ScreenBlockers},
 		{"Events", ScreenEvents},
-		{"Stats", ScreenStats},
 	}
 
 	for _, tt := range screens {
@@ -119,12 +119,26 @@ func TestViewSmoke_EmptyModel(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	screens := []Screen{ScreenOverview, ScreenNodes, ScreenDrains, ScreenPods, ScreenBlockers, ScreenEvents, ScreenStats}
+	screens := []Screen{ScreenOverview, ScreenNodes, ScreenDrains, ScreenPods, ScreenBlockers, ScreenEvents}
 	for _, screen := range screens {
 		m.screen = screen
 		output := m.View()
 		if output == "" {
 			t.Errorf("View() for empty model screen %d returned empty string", screen)
+		}
+	}
+}
+
+func TestViewSmoke_PodFilters(t *testing.T) {
+	m := newPopulatedModel()
+	m.screen = ScreenPods
+
+	filters := []PodFilterMode{PodFilterDisrupting, PodFilterRescheduled, PodFilterAll}
+	for _, filter := range filters {
+		m.podFilterMode = filter
+		output := m.View()
+		if output == "" {
+			t.Errorf("View() for pod filter %d returned empty string", filter)
 		}
 	}
 }

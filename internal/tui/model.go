@@ -2,6 +2,7 @@ package tui
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
+	"golang.org/x/mod/semver"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -30,7 +32,15 @@ const (
 	ScreenPods                   // 3 - Pod health, probes, phase by node
 	ScreenBlockers               // 4 - PDBs, local storage, stuck evictions
 	ScreenEvents                 // 5 - Full event log with filtering
-	ScreenStats                  // 6 - Timing, velocity, ETA, history
+)
+
+// PodFilterMode controls which pods are shown in the PODS screen
+type PodFilterMode int
+
+const (
+	PodFilterDisrupting  PodFilterMode = iota // Pods on CORDONED/DRAINING/UPGRADING nodes (default)
+	PodFilterRescheduled                      // Pods on COMPLETE nodes (did they land safely?)
+	PodFilterAll                              // All pods
 )
 
 // Overlay represents modal overlays on top of screens
@@ -86,14 +96,15 @@ type Model struct {
 	height int
 
 	// Navigation state
-	screen          Screen      // Current screen (0-6)
-	overlay         Overlay     // Modal overlay (none, help, detail)
-	selectedStage   int         // For Overview screen
-	selectedNode    int         // For Overview screen
-	listIndex       int         // For list-based screens (Overview node list, Events, Blockers)
-	eventFilter     EventFilter // Event filtering mode (upgrade/warnings/all)
-	eventAggregated bool        // Whether to show aggregated events
-	expandedGroup   string      // Currently expanded event group (reason)
+	screen          Screen        // Current screen (0-6)
+	overlay         Overlay       // Modal overlay (none, help, detail)
+	selectedStage   int           // For Overview screen
+	selectedNode    int           // For Overview screen
+	listIndex       int           // For list-based screens (Overview node list, Events, Blockers)
+	eventFilter     EventFilter   // Event filtering mode (upgrade/warnings/all)
+	eventAggregated bool          // Whether to show aggregated events
+	expandedGroup   string        // Currently expanded event group (reason)
+	podFilterMode   PodFilterMode // Pod view filter mode (disrupting/rescheduled/all)
 
 	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
@@ -102,6 +113,10 @@ type Model struct {
 	events       []types.Event
 	migrations   []types.Migration
 	blockers     []types.Blocker
+
+	// Cached version range (recomputed on NodeUpdateMsg, not render-time)
+	lowestVersion  string // Current lowest version across all nodes
+	highestVersion string // Current highest version across all nodes
 
 	// Detail overlay state
 	detailViewport viewport.Model
@@ -185,6 +200,7 @@ func New(cfg Config) Model {
 		m.nodes[node.Name] = node
 	}
 	m.rebuildNodesByStage()
+	m.recomputeVersionRange()
 
 	// Load initial pods
 	for _, pod := range cfg.InitialPods {
@@ -256,9 +272,25 @@ func tick() tea.Cmd {
 
 // Helper accessors
 
-func (m Model) contextName() string   { return m.config.Context }
-func (m Model) serverVersion() string { return m.config.ServerVersion }
-func (m Model) targetVersion() string { return m.config.TargetVersion }
+func (m Model) contextName() string { return m.config.Context }
+
+// currentVersion returns the current lowest version across nodes (dynamic).
+// Falls back to config.ServerVersion if no nodes are loaded yet.
+func (m Model) currentVersion() string {
+	if m.lowestVersion != "" {
+		return m.lowestVersion
+	}
+	return m.config.ServerVersion
+}
+
+// targetVersion returns the target (highest) version across nodes (dynamic).
+// Falls back to config.TargetVersion if no nodes are loaded yet.
+func (m Model) targetVersion() string {
+	if m.highestVersion != "" {
+		return m.highestVersion
+	}
+	return m.config.TargetVersion
+}
 
 // screenName returns the display name for the current screen
 func (m Model) screenName() string {
@@ -275,8 +307,6 @@ func (m Model) screenName() string {
 		return "BLOCKERS"
 	case ScreenEvents:
 		return "EVENTS"
-	case ScreenStats:
-		return "STATS"
 	default:
 		return ""
 	}
@@ -326,6 +356,39 @@ func (m *Model) rebuildNodesByStage() {
 	}
 }
 
+// recomputeVersionRange updates cached lowest/highest versions from current node data.
+// Called on every NodeUpdateMsg alongside rebuildNodesByStage().
+func (m *Model) recomputeVersionRange() {
+	var lowest, highest string
+	for _, node := range m.nodes {
+		if node.Deleted || node.Version == "" {
+			continue
+		}
+		version := node.Version
+		if lowest == "" || semver.Compare(version, lowest) < 0 {
+			lowest = version
+		}
+		if highest == "" || semver.Compare(version, highest) > 0 {
+			highest = version
+		}
+	}
+	m.lowestVersion = lowest
+	m.highestVersion = highest
+}
+
+// versionCore extracts "vMAJOR.MINOR.PATCH" stripping pre-release/build metadata.
+// e.g., "v1.33.5-gke.2019000" → "v1.33.5"
+func versionCore(v string) string {
+	c := semver.Canonical(v)
+	if c == "" {
+		return v
+	}
+	if idx := strings.Index(c, "-"); idx != -1 {
+		return c[:idx]
+	}
+	return c
+}
+
 func (m *Model) totalNodes() int {
 	return len(m.nodes)
 }
@@ -340,6 +403,32 @@ func (m *Model) progressPercent() int {
 		return 0
 	}
 	return (m.completedNodes() * 100) / total
+}
+
+// cyclePodFilter advances the pod filter mode: AFFECTED → SETTLED → ALL → AFFECTED
+func (m *Model) cyclePodFilter() {
+	switch m.podFilterMode {
+	case PodFilterDisrupting:
+		m.podFilterMode = PodFilterRescheduled
+	case PodFilterRescheduled:
+		m.podFilterMode = PodFilterAll
+	case PodFilterAll:
+		m.podFilterMode = PodFilterDisrupting
+	}
+}
+
+// podFilterLabel returns the display label for the current pod filter mode
+func (m *Model) podFilterLabel() string {
+	switch m.podFilterMode {
+	case PodFilterDisrupting:
+		return "disrupting"
+	case PodFilterRescheduled:
+		return "rescheduled"
+	case PodFilterAll:
+		return "all"
+	default:
+		return "disrupting"
+	}
 }
 
 // filteredEvents returns events based on the current filter mode

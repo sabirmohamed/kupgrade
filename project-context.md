@@ -1,7 +1,7 @@
 # Kupgrade Project Context
 
 > **Purpose**: Critical rules and patterns for AI agents implementing code.
-> **Last Updated**: 2026-01-28
+> **Last Updated**: 2026-01-31
 
 ---
 
@@ -159,12 +159,13 @@ Model (state) → Update (reducer) → View (render)
 
 | Key | Action |
 |-----|--------|
-| `0-6` | Switch screens |
+| `0-5` | Switch screens |
 | `↑/↓` or `j/k` | Navigate lists |
 | `Enter` | Show details |
 | `?` | Help overlay |
 | `q` | Back/Quit |
-| `u/w/a` | Event filter: Upgrade/Warnings/All |
+| `u/w/a` | Event filter: Upgrade/Warnings/All (Events screen) |
+| `a` | Cycle pod filter: disrupting/rescheduled/all (Pods screen) |
 | `g` | Toggle event aggregation |
 | `e` | Expand/collapse event group |
 
@@ -204,6 +205,16 @@ Color functions (pure, tested): `statusColor()`, `readyColor()`, `restartColor()
 ### Color Theme
 
 Tokyo Night palette defined in `internal/tui/styles.go` and `style/tui/tokyo-night.json`.
+
+### Version Tracking
+
+Version range (`lowestVersion`, `highestVersion`) is cached in Model and recomputed on every `NodeUpdateMsg` via `recomputeVersionRange()`. Never computed at render time.
+
+`versionCore()` strips pre-release metadata (e.g., `-gke.2019000`) for version comparison. This prevents false upgrade arrows when nodes report the same Kubernetes version with different cloud provider build suffixes.
+
+### Pod Filter
+
+Three-state filter on PODS screen (`a` key): `PodFilterDisrupting` → `PodFilterRescheduled` → `PodFilterAll`. Filter is only active when an upgrade is in progress (nodes in CORDONED/DRAINING/UPGRADING). When no upgrade is active, all pods are shown regardless of filter mode.
 
 ---
 
@@ -255,7 +266,7 @@ When implementing changes:
 1. **Read this file first** - Understand constraints before coding
 2. **Check story files** - See `_bmad-output/implementation-artifacts/` for active work
 3. **Follow Google Go Style** - See `style/go/decisions.md` for specific rules
-4. **Run verification** - `go build ./...` and `go vet ./...` before completing
+4. **Run verification** - `go fmt ./...`, `go vet ./...`, and `go build ./...` before completing
 5. **Keep TUI dumb** - Any logic changes go in watcher, not TUI
 
 ### Before Each Feature (Complexity Check)

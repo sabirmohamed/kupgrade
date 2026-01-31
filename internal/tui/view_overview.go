@@ -14,7 +14,7 @@ func (m Model) renderOverview() string {
 
 	// Header → Pipeline → Blockers → Drain → Node List → Events → Footer
 	b.WriteString(m.renderCompactHeader())
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 	b.WriteString(m.renderPipelineRow())
 	b.WriteString("\n")
 

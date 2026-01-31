@@ -16,11 +16,7 @@ func (m Model) renderCompactHeader() string {
 
 	context := contextStyle.Render(m.contextName())
 
-	version := m.serverVersion()
-	if m.targetVersion() != "" && m.targetVersion() != m.serverVersion() {
-		version = fmt.Sprintf("%s → %s", m.serverVersion(), m.targetVersion())
-	}
-	versionDisplay := versionStyle.Render(version)
+	versionDisplay := m.renderVersionDisplay()
 
 	// Progress bar with percentage
 	progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
@@ -28,7 +24,7 @@ func (m Model) renderCompactHeader() string {
 
 	timeDisplay := timeStyle.Render(m.currentTime.Format("15:04:05"))
 
-	return fmt.Sprintf("%s  %s  %s  %s %s  %s",
+	return fmt.Sprintf("%s  %s | %s  %s %s | %s",
 		titleDisplay, context, versionDisplay, progress, percent, timeDisplay)
 }
 
@@ -42,11 +38,7 @@ func (m Model) renderHeader() string {
 
 	context := contextStyle.Render(m.contextName())
 
-	version := m.serverVersion()
-	if m.targetVersion() != "" && m.targetVersion() != m.serverVersion() {
-		version = fmt.Sprintf("%s→%s", m.serverVersion(), m.targetVersion())
-	}
-	versionDisplay := versionStyle.Render(version)
+	versionDisplay := m.renderVersionDisplay()
 
 	progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
 	percent := fmt.Sprintf("%d%%", m.progressPercent())
@@ -55,6 +47,28 @@ func (m Model) renderHeader() string {
 
 	return fmt.Sprintf("%s  %s | %s | %s %s | %s",
 		titleDisplay, context, versionDisplay, progress, percent, timeDisplay)
+}
+
+// renderVersionDisplay renders the version indicator for headers.
+// During upgrade (mixed versions): "v1.32.9 → v1.33.5" in warning color.
+// After complete (all same version): "v1.33.5" in success color.
+func (m Model) renderVersionDisplay() string {
+	current := m.currentVersion()
+	target := m.targetVersion()
+
+	if current != "" && target != "" && versionCore(current) != versionCore(target) {
+		// Upgrade in progress: show from → to
+		return versionStyle.Render(fmt.Sprintf("%s → %s", current, target))
+	}
+	// All nodes at same version (or no upgrade detected)
+	version := target
+	if version == "" {
+		version = current
+	}
+	if m.progressPercent() == 100 && m.totalNodes() > 0 {
+		return versionCompleteStyle.Render(version)
+	}
+	return versionStyle.Render(version)
 }
 
 // renderPipelineRow renders compact stage counts with arrows
@@ -160,23 +174,45 @@ func (m Model) mainWidth() int {
 	return m.width
 }
 
-// getFilteredPodList returns pods filtered to upgrading nodes (or all if none upgrading)
+// getFilteredPodList returns pods filtered by the current pod filter mode.
+// When no upgrade is active (no CORDONED/DRAINING/UPGRADING nodes), shows all pods.
 func (m *Model) getFilteredPodList() []types.PodState {
-	upgradeNodes := make(map[string]bool)
+	affectedNodes := make(map[string]bool)
 	for _, name := range m.nodesByStage[types.StageCordoned] {
-		upgradeNodes[name] = true
+		affectedNodes[name] = true
 	}
 	for _, name := range m.nodesByStage[types.StageDraining] {
-		upgradeNodes[name] = true
+		affectedNodes[name] = true
 	}
 	for _, name := range m.nodesByStage[types.StageUpgrading] {
-		upgradeNodes[name] = true
+		affectedNodes[name] = true
 	}
 
+	settledNodes := make(map[string]bool)
+	for _, name := range m.nodesByStage[types.StageComplete] {
+		settledNodes[name] = true
+	}
+
+	upgradeActive := len(affectedNodes) > 0
+
 	var podList []types.PodState
-	showAll := len(upgradeNodes) == 0
 	for _, pod := range m.pods {
-		if showAll || upgradeNodes[pod.NodeName] {
+		if !upgradeActive {
+			// No upgrade in progress: show all pods regardless of filter mode
+			podList = append(podList, pod)
+			continue
+		}
+
+		switch m.podFilterMode {
+		case PodFilterDisrupting:
+			if affectedNodes[pod.NodeName] {
+				podList = append(podList, pod)
+			}
+		case PodFilterRescheduled:
+			if settledNodes[pod.NodeName] {
+				podList = append(podList, pod)
+			}
+		case PodFilterAll:
 			podList = append(podList, pod)
 		}
 	}

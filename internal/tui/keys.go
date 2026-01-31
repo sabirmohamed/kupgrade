@@ -28,6 +28,8 @@ type keyMap struct {
 	EventAll       key.Binding
 	EventAggregate key.Binding
 	EventExpand    key.Binding
+	// Pod filtering
+	PodFilter key.Binding
 }
 
 // ShortHelp returns key bindings for the short help view (footer).
@@ -122,6 +124,10 @@ var defaultKeys = keyMap{
 		key.WithKeys("e"),
 		key.WithHelp("e", "expand"),
 	),
+	PodFilter: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "cycle filter"),
+	),
 }
 
 // screenFromKey returns the screen number if a screen key was pressed, -1 otherwise
@@ -139,8 +145,6 @@ func screenFromKey(msg tea.KeyMsg) Screen {
 		return ScreenBlockers
 	case "5":
 		return ScreenEvents
-	case "6":
-		return ScreenStats
 	default:
 		return Screen(-1)
 	}

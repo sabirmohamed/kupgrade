@@ -55,7 +55,6 @@ func TestScreenNavigation(t *testing.T) {
 		{"3", ScreenPods},
 		{"4", ScreenBlockers},
 		{"5", ScreenEvents},
-		{"6", ScreenStats},
 		{"0", ScreenOverview},
 	}
 
@@ -119,8 +118,8 @@ func TestQuitFromNonOverviewReturnsToOverview(t *testing.T) {
 	eventCh, nodeCh, podCh, blockerCh := mockChannels()
 	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
-	// Navigate to Stats screen
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")}
+	// Navigate to Events screen
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")}
 	newModel, _ := m.Update(msg)
 	m = newModel.(Model)
 
@@ -130,7 +129,7 @@ func TestQuitFromNonOverviewReturnsToOverview(t *testing.T) {
 	m = newModel.(Model)
 
 	if m.screen != ScreenOverview {
-		t.Errorf("expected ScreenOverview after q from Stats, got %d", m.screen)
+		t.Errorf("expected ScreenOverview after q from Events, got %d", m.screen)
 	}
 
 	// cmd should not be tea.Quit - verify it's nil (no quit command issued)
@@ -202,7 +201,6 @@ func TestScreenName(t *testing.T) {
 		{ScreenPods, "PODS"},
 		{ScreenBlockers, "BLOCKERS"},
 		{ScreenEvents, "EVENTS"},
-		{ScreenStats, "STATS"},
 	}
 
 	for _, tt := range tests {

@@ -122,8 +122,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleBlockersKey(msg)
 	case ScreenEvents:
 		return m.handleEventsKey(msg)
-	case ScreenStats:
-		return m.handleStatsKey(msg)
 	}
 
 	return *m, nil
@@ -256,6 +254,11 @@ func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		return *m, nil
 	}
+	if key.Matches(msg, m.keys.PodFilter) {
+		m.cyclePodFilter()
+		m.listIndex = 0
+		return *m, nil
+	}
 	return m.handleListNavigation(msg, m.filteredPodCount())
 }
 
@@ -338,10 +341,6 @@ func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m.handleListNavigation(msg, itemCount)
 }
 
-func (m *Model) handleStatsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	return *m, nil
-}
-
 // handleListNavigation provides common up/down/g/G/pgup/pgdown navigation for non-table list screens
 func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.Cmd) {
 	pageSize := m.height - 10
@@ -413,6 +412,7 @@ func (m *Model) handleNodeUpdate(node types.NodeState) {
 		m.nodes[node.Name] = node
 	}
 	m.rebuildNodesByStage()
+	m.recomputeVersionRange()
 }
 
 // handlePodUpdate stores pod state from watcher
