@@ -257,4 +257,3 @@ func (m *Model) getDrainNodes() []string {
 	sort.Strings(drainNodes)
 	return drainNodes
 }
-

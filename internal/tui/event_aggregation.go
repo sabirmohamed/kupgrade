@@ -11,13 +11,13 @@ import (
 
 // AggregatedEvent represents multiple similar events collapsed into one
 type AggregatedEvent struct {
-	Reason       string
-	Severity     types.Severity
-	Timestamp    time.Time       // Most recent timestamp
-	Count        int             // Number of occurrences
-	Resources    []string        // Affected resources (pods, nodes)
-	NodeName     string          // Node if all events are for same node
-	SampleEvent  types.Event     // Representative event for details
+	Reason      string
+	Severity    types.Severity
+	Timestamp   time.Time   // Most recent timestamp
+	Count       int         // Number of occurrences
+	Resources   []string    // Affected resources (pods, nodes)
+	NodeName    string      // Node if all events are for same node
+	SampleEvent types.Event // Representative event for details
 }
 
 // aggregationWindow defines how close events must be to aggregate (30 seconds)

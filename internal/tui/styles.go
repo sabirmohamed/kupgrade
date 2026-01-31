@@ -16,12 +16,11 @@ const (
 	stageCount       = 5
 
 	// Events panel
-	eventTypeWidth        = 14
-	eventTimestampWidth   = 8
-	eventIconWidth        = 2
-	eventPaddingTotal     = eventTimestampWidth + eventIconWidth + 4 + 4 // spacing + border/padding
-	eventMinMessageWidth  = 20
-
+	eventTypeWidth       = 14
+	eventTimestampWidth  = 8
+	eventIconWidth       = 2
+	eventPaddingTotal    = eventTimestampWidth + eventIconWidth + 4 + 4 // spacing + border/padding
+	eventMinMessageWidth = 20
 )
 
 // Color palette - Omarchy Tokyo Night theme
@@ -150,7 +149,6 @@ var (
 
 	nodeVersionStyle = lipgloss.NewStyle().
 				Foreground(colorTextMuted)
-
 )
 
 // Panel styles

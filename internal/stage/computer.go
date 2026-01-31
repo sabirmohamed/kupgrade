@@ -10,10 +10,10 @@ import (
 
 // Computer implements StageComputer for node stage detection
 type Computer struct {
-	targetVersion  string
-	lowestVersion  string
-	nodePodCounts  map[string]int
-	mu             sync.RWMutex
+	targetVersion string
+	lowestVersion string
+	nodePodCounts map[string]int
+	mu            sync.RWMutex
 }
 
 // New creates a new stage computer

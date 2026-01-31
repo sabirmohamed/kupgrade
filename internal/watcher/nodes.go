@@ -17,8 +17,8 @@ type NodeWatcher struct {
 	emitter         EventEmitter
 	stages          StageComputer
 	podCounter      func(nodeName string) int
-	drainStartTimes map[string]time.Time    // Track when each node started draining
-	initialPodCount map[string]int          // Track pod count when drain started
+	drainStartTimes map[string]time.Time // Track when each node started draining
+	initialPodCount map[string]int       // Track pod count when drain started
 }
 
 // NewNodeWatcher creates a new node watcher

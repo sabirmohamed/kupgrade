@@ -64,11 +64,11 @@ func (m Model) renderEventsScreen() string {
 							nodeName = "-"
 						}
 						// Use available width minus prefix (timestamp, icon, node, indent)
-					msgWidth := m.mainWidth() - 45
-					if msgWidth < 40 {
-						msgWidth = 40
-					}
-					subLine := fmt.Sprintf("       %s %s %-12s %s",
+						msgWidth := m.mainWidth() - 45
+						if msgWidth < 40 {
+							msgWidth = 40
+						}
+						subLine := fmt.Sprintf("       %s %s %-12s %s",
 							subTs, subIcon, nodeName, truncateMessage(e.Message, msgWidth))
 						b.WriteString(footerDescStyle.Render(subLine))
 						b.WriteString("\n")

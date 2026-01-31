@@ -24,13 +24,13 @@ const (
 type Screen int
 
 const (
-	ScreenOverview  Screen = iota // 0 - Pipeline stages with node cards
-	ScreenNodes                   // 1 - Full node details, conditions, taints
-	ScreenDrains                  // 2 - Eviction progress per node
-	ScreenPods                    // 3 - Pod health, probes, phase by node
-	ScreenBlockers                // 4 - PDBs, local storage, stuck evictions
-	ScreenEvents                  // 5 - Full event log with filtering
-	ScreenStats                   // 6 - Timing, velocity, ETA, history
+	ScreenOverview Screen = iota // 0 - Pipeline stages with node cards
+	ScreenNodes                  // 1 - Full node details, conditions, taints
+	ScreenDrains                 // 2 - Eviction progress per node
+	ScreenPods                   // 3 - Pod health, probes, phase by node
+	ScreenBlockers               // 4 - PDBs, local storage, stuck evictions
+	ScreenEvents                 // 5 - Full event log with filtering
+	ScreenStats                  // 6 - Timing, velocity, ETA, history
 )
 
 // Overlay represents modal overlays on top of screens
@@ -86,14 +86,14 @@ type Model struct {
 	height int
 
 	// Navigation state
-	screen           Screen      // Current screen (0-6)
-	overlay          Overlay     // Modal overlay (none, help, detail)
-	selectedStage    int         // For Overview screen
-	selectedNode     int         // For Overview screen
-	listIndex        int         // For list-based screens (Overview node list, Events, Blockers)
-	eventFilter      EventFilter // Event filtering mode (upgrade/warnings/all)
-	eventAggregated  bool        // Whether to show aggregated events
-	expandedGroup    string      // Currently expanded event group (reason)
+	screen          Screen      // Current screen (0-6)
+	overlay         Overlay     // Modal overlay (none, help, detail)
+	selectedStage   int         // For Overview screen
+	selectedNode    int         // For Overview screen
+	listIndex       int         // For list-based screens (Overview node list, Events, Blockers)
+	eventFilter     EventFilter // Event filtering mode (upgrade/warnings/all)
+	eventAggregated bool        // Whether to show aggregated events
+	expandedGroup   string      // Currently expanded event group (reason)
 
 	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
@@ -168,17 +168,17 @@ func New(cfg Config) Model {
 		screen:         ScreenOverview,
 		overlay:        OverlayNone,
 		detailViewport: vp,
-		nodes:           make(map[string]types.NodeState),
-		nodesByStage:    make(map[types.NodeStage][]string),
-		pods:            make(map[string]types.PodState),
-		events:          make([]types.Event, 0, maxEvents),
-		migrations:      make([]types.Migration, 0, maxMigrations),
-		blockers:        make([]types.Blocker, 0),
-		currentTime:     time.Now(),
-		spinner:         sp,
-		progress:        prog,
-		smallProg:       smallProg,
-		help:            h,
+		nodes:          make(map[string]types.NodeState),
+		nodesByStage:   make(map[types.NodeStage][]string),
+		pods:           make(map[string]types.PodState),
+		events:         make([]types.Event, 0, maxEvents),
+		migrations:     make([]types.Migration, 0, maxMigrations),
+		blockers:       make([]types.Blocker, 0),
+		currentTime:    time.Now(),
+		spinner:        sp,
+		progress:       prog,
+		smallProg:      smallProg,
+		help:           h,
 	}
 
 	// Load initial nodes
@@ -430,4 +430,3 @@ func calcScrollOffset(selected, visibleRows, totalItems int) int {
 	}
 	return offset
 }
-

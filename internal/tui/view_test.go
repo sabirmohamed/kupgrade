@@ -72,9 +72,9 @@ func TestStatusColor(t *testing.T) {
 
 func TestReadyColor(t *testing.T) {
 	tests := []struct {
-		name  string
-		pod   types.PodState
-		want  string
+		name string
+		pod  types.PodState
+		want string
 	}{
 		{"no containers", types.PodState{TotalContainers: 0}, string(colorTextMuted)},
 		{"all ready", types.PodState{ReadyContainers: 3, TotalContainers: 3}, string(colorComplete)},
