@@ -24,9 +24,11 @@ func (m Model) renderDrainsScreen() string {
 		b.WriteString(m.renderDrainsTable(drainNodes))
 	}
 
-	// Migrations section
-	b.WriteString("\n")
-	b.WriteString(m.renderMigrationsSection())
+	// Migrations section (only if migrations exist)
+	if len(m.migrations) > 0 {
+		b.WriteString("\n")
+		b.WriteString(m.renderMigrationsSection())
+	}
 
 	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
@@ -136,6 +138,11 @@ func (m Model) renderDrainsTable(drainNodes []string) string {
 func buildDrainRow(node types.NodeState) []string {
 	progressBar := plainProgressBar(node.DrainProgress, 10)
 
+	// UPGRADING nodes have completed drain — show 100% progress
+	if node.Stage == types.StageUpgrading {
+		progressBar = plainProgressBar(100, 10)
+	}
+
 	var status string
 	if node.Blocked {
 		status = node.BlockerReason
@@ -147,6 +154,8 @@ func buildDrainRow(node types.NodeState) []string {
 		status = "evicting..."
 	} else if node.Stage == types.StageCordoned {
 		status = "waiting"
+	} else if node.Stage == types.StageUpgrading {
+		status = "rebooting..."
 	} else {
 		status = "-"
 	}
@@ -159,6 +168,9 @@ func buildDrainRow(node types.NodeState) []string {
 		status,
 	}
 }
+
+// migrationTableMaxRows limits the migrations table height
+const migrationTableMaxRows = 10
 
 // renderMigrationsSection shows recent pod migrations during drains
 func (m Model) renderMigrationsSection() string {
@@ -173,30 +185,93 @@ func (m Model) renderMigrationsSection() string {
 		return b.String()
 	}
 
-	// Show most recent migrations (up to 8 for the section)
-	maxDisplay := 8
-	start := 0
-	if len(m.migrations) > maxDisplay {
-		start = len(m.migrations) - maxDisplay
+	// Build rows from most recent migrations (newest first)
+	maxDisplay := migrationTableMaxRows
+	if len(m.migrations) < maxDisplay {
+		maxDisplay = len(m.migrations)
 	}
 
-	for i := len(m.migrations) - 1; i >= start; i-- {
+	rows := make([][]string, 0, maxDisplay)
+	for i := len(m.migrations) - 1; i >= len(m.migrations)-maxDisplay; i-- {
 		mig := m.migrations[i]
-		icon := migrateIcon
+		status := migrateIcon
 		if mig.Complete {
-			icon = checkIcon
+			status = checkIcon
 		}
-		ts := timestampStyle.Render(mig.Timestamp.Format("15:04:05"))
-		line := fmt.Sprintf("  %s %s %s/%s → %s", ts, icon, mig.Namespace, truncateString(mig.NewPod, 40), mig.ToNode)
-		b.WriteString(line)
-		b.WriteString("\n")
+		podName := mig.Namespace + "/" + mig.NewPod
+		nodeName := shortenNodeName(mig.ToNode)
+		rows = append(rows, []string{
+			mig.Timestamp.Format("15:04:05"),
+			status,
+			podName,
+			nodeName,
+		})
 	}
 
-	if len(m.migrations) > maxDisplay {
-		b.WriteString(footerDescStyle.Render(fmt.Sprintf("  ... %d more", len(m.migrations)-maxDisplay)))
+	tableWidth := m.mainWidth() - 2
+	if tableWidth < 60 {
+		tableWidth = 60
+	}
+
+	t := table.New().
+		Headers("TIME", "", "POD", "DESTINATION").
+		Rows(rows...).
+		Width(tableWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderColumn(false).
+		BorderRow(false).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderHeader(true).
+		BorderStyle(tableBorderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			style := lipgloss.NewStyle().Padding(0, 1)
+			if row == table.HeaderRow {
+				return style.Foreground(colorTextMuted).Bold(true)
+			}
+			// Alternating row backgrounds
+			if row%2 == 0 {
+				style = style.Background(colorBg)
+			} else {
+				style = style.Background(colorBgAlt)
+			}
+			switch col {
+			case 0: // TIME
+				style = style.Foreground(colorTextDim)
+			case 1: // STATUS icon
+				if row < len(rows) && rows[row][1] == checkIcon {
+					style = style.Foreground(colorComplete)
+				} else {
+					style = style.Foreground(colorCyan)
+				}
+			case 2: // POD
+				style = style.Foreground(colorText)
+			case 3: // DESTINATION
+				style = style.Foreground(colorTextMuted)
+			}
+			return style
+		})
+
+	b.WriteString(t.String())
+
+	if len(m.migrations) > migrationTableMaxRows {
+		b.WriteString("\n")
+		b.WriteString(footerDescStyle.Render(fmt.Sprintf("  ... %d more", len(m.migrations)-migrationTableMaxRows)))
 	}
 
 	return b.String()
+}
+
+// shortenNodeName truncates long node names to show the meaningful suffix.
+// e.g., "gke-testbed-gke-default-pool-fa2ce801-l2k0" → "...fa2ce801-l2k0"
+func shortenNodeName(name string) string {
+	const maxNodeNameLen = 24
+	if len(name) <= maxNodeNameLen {
+		return name
+	}
+	return "..." + name[len(name)-maxNodeNameLen+3:]
 }
 
 // plainProgressBar renders a text-only progress bar safe for use in table cells

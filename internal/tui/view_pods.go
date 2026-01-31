@@ -154,6 +154,12 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 				if pod.OwnerKind == "DaemonSet" {
 					style = style.Foreground(colorYellow)
 				}
+			case 7: // NODE
+				if pod.NodeName != "" {
+					if _, exists := m.nodes[pod.NodeName]; !exists {
+						style = style.Foreground(colorError)
+					}
+				}
 			}
 
 			return style

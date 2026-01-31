@@ -10,10 +10,12 @@ import (
 
 // Computer implements StageComputer for node stage detection
 type Computer struct {
-	targetVersion string
-	lowestVersion string
-	nodePodCounts map[string]int
-	mu            sync.RWMutex
+	targetVersion    string
+	lowestVersion    string
+	upgradeWasActive bool // true once mixed versions detected
+	upgradeCompleted bool // true once versions converge after being mixed
+	nodePodCounts    map[string]int
+	mu               sync.RWMutex
 }
 
 // New creates a new stage computer
@@ -35,11 +37,12 @@ func (c *Computer) ComputeStage(node *corev1.Node) types.NodeStage {
 	schedulable := !node.Spec.Unschedulable
 	ready := isNodeReady(node)
 
-	// Check if upgrade is active (mixed versions exist)
+	// Check if upgrade is active (mixed versions exist) or was completed
 	upgradeActive := lowest != "" && target != "" && lowest != target
+	completed := c.upgradeCompleted
 
 	switch {
-	case upgradeActive && version == target && ready && schedulable:
+	case (upgradeActive || completed) && version == target && ready && schedulable:
 		return types.StageComplete
 	case !ready:
 		return types.StageUpgrading
@@ -80,6 +83,31 @@ func (c *Computer) SetTargetVersion(version string) {
 	if c.lowestVersion == "" || semver.Compare(version, c.lowestVersion) < 0 {
 		c.lowestVersion = version
 	}
+
+	c.checkUpgradeCompletion()
+}
+
+// checkUpgradeCompletion detects upgrade lifecycle transitions.
+// Must be called with lock held.
+func (c *Computer) checkUpgradeCompletion() {
+	if c.lowestVersion == "" || c.targetVersion == "" {
+		return
+	}
+	if c.lowestVersion != c.targetVersion {
+		// Mixed versions: upgrade is active
+		c.upgradeWasActive = true
+		c.upgradeCompleted = false // Reset if new upgrade started
+	} else if c.upgradeWasActive {
+		// Versions converged after being mixed: upgrade complete
+		c.upgradeCompleted = true
+	}
+}
+
+// UpgradeCompleted returns true if an upgrade has completed (versions converged after being mixed)
+func (c *Computer) UpgradeCompleted() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.upgradeCompleted
 }
 
 // TargetVersion returns the current target version
@@ -87,6 +115,28 @@ func (c *Computer) TargetVersion() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.targetVersion
+}
+
+// RecomputeVersions recalculates target and lowest versions from the given list
+func (c *Computer) RecomputeVersions(versions []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.lowestVersion = ""
+	c.targetVersion = ""
+	for _, v := range versions {
+		if v == "" {
+			continue
+		}
+		if c.targetVersion == "" || semver.Compare(v, c.targetVersion) > 0 {
+			c.targetVersion = v
+		}
+		if c.lowestVersion == "" || semver.Compare(v, c.lowestVersion) < 0 {
+			c.lowestVersion = v
+		}
+	}
+
+	c.checkUpgradeCompletion()
 }
 
 // LowestVersion returns the lowest version seen across nodes

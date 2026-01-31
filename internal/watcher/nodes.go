@@ -160,6 +160,17 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 		Name:    node.Name,
 		Deleted: true,
 	})
+
+	// Recompute versions from remaining nodes
+	var versions []string
+	for _, obj := range w.informer.GetStore().List() {
+		remainingNode, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		versions = append(versions, remainingNode.Status.NodeInfo.KubeletVersion)
+	}
+	w.stages.RecomputeVersions(versions)
 }
 
 // buildState creates NodeState from a k8s Node (single source of truth)

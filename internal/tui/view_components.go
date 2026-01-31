@@ -235,6 +235,7 @@ func (m *Model) getDrainNodes() []string {
 	var drainNodes []string
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageCordoned]...)
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageDraining]...)
+	drainNodes = append(drainNodes, m.nodesByStage[types.StageUpgrading]...)
 	sort.Strings(drainNodes)
 	return drainNodes
 }

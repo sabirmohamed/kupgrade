@@ -143,6 +143,21 @@ func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
 			Namespace: newPod.Namespace,
 		})
 	}
+
+	// Check for migration completion (pod scheduled to a node for the first time)
+	if oldPod.Spec.NodeName == "" && newPod.Spec.NodeName != "" {
+		if migration := w.migrations.OnPodAdd(newPod); migration != nil {
+			w.emitter.Emit(types.Event{
+				Type:      types.EventMigration,
+				Severity:  types.SeverityInfo,
+				Timestamp: time.Now(),
+				Message:   fmt.Sprintf("Pod %s/%s migrated: %s → %s", newPod.Namespace, migration.NewPod, migration.FromNode, migration.ToNode),
+				NodeName:  migration.ToNode,
+				PodName:   migration.NewPod,
+				Namespace: newPod.Namespace,
+			})
+		}
+	}
 }
 
 func (w *PodWatcher) onDelete(obj interface{}) {

@@ -159,7 +159,11 @@ func (m Model) renderNodeList() string {
 	if len(m.blockers) > 0 {
 		blockerLines = len(m.blockers) + 3
 	}
-	reservedLines := 1 + 3 + blockerLines + 12 + 3
+	eventsLines := len(m.events)
+	if eventsLines > 8 {
+		eventsLines = 8
+	}
+	reservedLines := 1 + 3 + blockerLines + eventsLines + 4 + 3
 	visibleRows := m.height - reservedLines
 	if visibleRows < 3 {
 		visibleRows = 3
@@ -177,19 +181,14 @@ func (m Model) renderNodeList() string {
 		scrollOffset = m.listIndex - visibleRows + 1
 	}
 
-	// Show node count with selected stage in title
-	stageName := m.stageAtIndex(m.selectedStage)
-	stageCount := len(m.nodesByStage[stageName])
+	// Show node count with total in title
 	total := len(allNodes)
 
-	titleStr := fmt.Sprintf("NODES: %s (%d)", stageName, stageCount)
-	if stageCount == total {
-		titleStr = fmt.Sprintf("NODES: %s (%d)", stageName, total)
-	}
+	titleStr := fmt.Sprintf("NODES (%d)", total)
 
 	hints := footerDescStyle.Render("↑↓ navigate • d describe")
 
-	titleLen := len(fmt.Sprintf("NODES: %s (%d)", stageName, stageCount))
+	titleLen := len(titleStr)
 	hintsLen := 20
 	spacing := m.mainWidth() - titleLen - hintsLen - 4
 	if spacing < 4 {

@@ -51,8 +51,15 @@ type StageComputer interface {
 	// LowestVersion returns the lowest version seen across nodes.
 	LowestVersion() string
 
+	// UpgradeCompleted returns true if an upgrade has completed
+	// (versions converged after being mixed).
+	UpgradeCompleted() bool
+
 	// PodCount returns the pod count for a node.
 	PodCount(nodeName string) int
+
+	// RecomputeVersions recalculates target and lowest versions from the given list.
+	RecomputeVersions(versions []string)
 }
 
 // MigrationTracker correlates pod deletes with creates to detect migrations.
