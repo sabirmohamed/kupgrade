@@ -64,7 +64,7 @@ func (m Model) renderEventsScreen() string {
 							nodeName = "-"
 						}
 						// Use available width minus prefix (timestamp, icon, node, indent)
-					msgWidth := m.width - 45
+					msgWidth := m.mainWidth() - 45
 					if msgWidth < 40 {
 						msgWidth = 40
 					}
@@ -159,7 +159,7 @@ func (m Model) renderEventsFooter() string {
 	} else {
 		countInfo = fmt.Sprintf("Showing %d of %d events", len(events), len(m.events))
 	}
-	return footerDescStyle.Render("  " + countInfo + "  •  ↑↓ navigate  •  q back")
+	return footerDescStyle.Render("  " + countInfo + "  •  ↑↓ navigate  •  d describe  •  q back")
 }
 
 // renderEventsPanel renders events in bottom panel (legacy layout)

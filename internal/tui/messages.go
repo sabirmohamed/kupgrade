@@ -28,5 +28,11 @@ type ErrorMsg struct {
 	Recoverable bool
 }
 
+// DescribeMsg carries the result of an async kubectl-describe call
+type DescribeMsg struct {
+	Content string
+	Err     error
+}
+
 // TickMsg triggers periodic updates
 type TickMsg struct{}

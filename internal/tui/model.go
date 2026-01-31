@@ -7,10 +7,12 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -37,7 +39,17 @@ type Overlay int
 const (
 	OverlayNone Overlay = iota
 	OverlayHelp
-	OverlayNodeDetail
+	OverlayDetail // Full-screen detail for node/pod describe
+)
+
+// DetailType represents the resource shown in the detail overlay
+type DetailType int
+
+const (
+	DetailNone DetailType = iota
+	DetailNode
+	DetailPod
+	DetailEvent
 )
 
 // EventFilter represents the event filtering mode
@@ -61,6 +73,7 @@ type Config struct {
 	NodeStateCh     <-chan types.NodeState
 	PodStateCh      <-chan types.PodState
 	BlockerCh       <-chan types.Blocker
+	Clientset       kubernetes.Interface
 }
 
 // Model is the TUI state
@@ -90,6 +103,11 @@ type Model struct {
 	migrations   []types.Migration
 	blockers     []types.Blocker
 	eventCount   int
+
+	// Detail overlay state
+	detailViewport viewport.Model
+	detailType     DetailType
+	detailKey      string // node name, "ns/pod", or event composite key
 
 	// Bubbles components
 	spinner   spinner.Model
@@ -142,22 +160,25 @@ func New(cfg Config) Model {
 	h.Styles.FullDesc = footerDescStyle
 	h.Styles.FullSeparator = footerDescStyle
 
+	vp := viewport.New(0, 0) // Sized on first WindowSizeMsg
+
 	m := Model{
-		config:       cfg,
-		keys:         defaultKeys,
-		screen:       ScreenOverview,
-		overlay:      OverlayNone,
-		nodes:        make(map[string]types.NodeState),
-		nodesByStage: make(map[types.NodeStage][]string),
-		pods:         make(map[string]types.PodState),
-		events:       make([]types.Event, 0, maxEvents),
-		migrations:   make([]types.Migration, 0, maxMigrations),
-		blockers:     make([]types.Blocker, 0),
-		currentTime:  time.Now(),
-		spinner:      sp,
-		progress:     prog,
-		smallProg:    smallProg,
-		help:         h,
+		config:         cfg,
+		keys:           defaultKeys,
+		screen:         ScreenOverview,
+		overlay:        OverlayNone,
+		detailViewport: vp,
+		nodes:           make(map[string]types.NodeState),
+		nodesByStage:    make(map[types.NodeStage][]string),
+		pods:            make(map[string]types.PodState),
+		events:          make([]types.Event, 0, maxEvents),
+		migrations:      make([]types.Migration, 0, maxMigrations),
+		blockers:        make([]types.Blocker, 0),
+		currentTime:     time.Now(),
+		spinner:         sp,
+		progress:        prog,
+		smallProg:       smallProg,
+		help:            h,
 	}
 
 	// Load initial nodes

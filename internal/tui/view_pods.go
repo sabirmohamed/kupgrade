@@ -73,7 +73,7 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 	}
 	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(podList))
 
-	tableWidth := m.width - 2
+	tableWidth := m.mainWidth() - 2
 	if tableWidth < 120 {
 		tableWidth = 120
 	}
@@ -159,8 +159,10 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 	rendered := t.String()
 
 	if len(podList) > visibleRows {
-		pos := fmt.Sprintf(" %d/%d", m.listIndex+1, len(podList))
+		pos := fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(podList))
 		rendered += "\n" + footerDescStyle.Render(pos)
+	} else if len(podList) > 0 {
+		rendered += "\n" + footerDescStyle.Render(" d describe")
 	}
 
 	return rendered

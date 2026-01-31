@@ -22,9 +22,6 @@ const (
 	eventPaddingTotal     = eventTimestampWidth + eventIconWidth + 4 + 4 // spacing + border/padding
 	eventMinMessageWidth  = 20
 
-	// Panels
-	panelGapWidth = 2
-	panelMinWidth = 25
 )
 
 // Color palette - Omarchy Tokyo Night theme
@@ -32,7 +29,7 @@ const (
 var (
 	// Backgrounds (layered depth)
 	colorBg        = lipgloss.Color("#1a1b26") // Main background
-	colorBgAlt     = lipgloss.Color("#16161e") // Panel/sidebar background
+	colorBgAlt     = lipgloss.Color("#16161e") // Alternate panel background
 	colorBgHover   = lipgloss.Color("#1f2335") // Hover state
 	colorSelected  = lipgloss.Color("#414868") // Selected item background
 	colorBorder    = lipgloss.Color("#565f89") // Border/divider lines

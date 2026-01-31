@@ -72,6 +72,7 @@ func runWatch(configFlags *genericclioptions.ConfigFlags, targetVersion string) 
 		NodeStateCh:     manager.NodeStateUpdates(),
 		PodStateCh:      manager.PodStateUpdates(),
 		BlockerCh:       manager.BlockerUpdates(),
+		Clientset:       client.Clientset,
 	})
 
 	p := tea.NewProgram(model, tea.WithAltScreen())

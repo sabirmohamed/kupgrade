@@ -161,6 +161,11 @@ func truncateString(s string, maxLen int) string {
 
 // Layout calculation helpers
 
+// mainWidth returns the width available for the main content area.
+func (m Model) mainWidth() int {
+	return m.width
+}
+
 // nodeCardWidth calculates card width based on terminal width
 func (m Model) nodeCardWidth() int {
 	if m.width <= 0 {

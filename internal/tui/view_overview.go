@@ -42,9 +42,10 @@ func (m Model) renderOverview() string {
 
 	content := b.String()
 
-	// Fill terminal dimensions
-	if m.width > 0 && m.height > 0 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
+	// Fill available main area dimensions
+	w := m.mainWidth()
+	if w > 0 && m.height > 0 {
+		return lipgloss.Place(w, m.height, lipgloss.Left, lipgloss.Top, content)
 	}
 	return content
 }
@@ -131,8 +132,8 @@ func (m Model) renderDrainProgressSection() string {
 		// Show waiting pods if any
 		if len(node.WaitingPods) > 0 {
 			waiting := "Waiting on: " + strings.Join(node.WaitingPods, "  ")
-			if len(waiting) > m.width-4 {
-				waiting = waiting[:m.width-7] + "..."
+			if len(waiting) > m.mainWidth()-4 {
+				waiting = waiting[:m.mainWidth()-7] + "..."
 			}
 			b.WriteString(footerDescStyle.Render(waiting))
 			b.WriteString("\n")
@@ -186,11 +187,11 @@ func (m Model) renderNodeList() string {
 		titleStr = fmt.Sprintf("NODES: %s (%d)", stageName, total)
 	}
 
-	hints := footerDescStyle.Render("↑↓ navigate • ⏎ details")
+	hints := footerDescStyle.Render("↑↓ navigate • d describe")
 
 	titleLen := len(fmt.Sprintf("NODES: %s (%d)", stageName, stageCount))
 	hintsLen := 20
-	spacing := m.width - titleLen - hintsLen - 4
+	spacing := m.mainWidth() - titleLen - hintsLen - 4
 	if spacing < 4 {
 		spacing = 4
 	}
@@ -207,14 +208,14 @@ func (m Model) renderNodeList() string {
 
 	// Calculate column widths
 	nameWidth := 30
-	if m.width > 100 {
+	if m.mainWidth() > 100 {
 		nameWidth = 35
 	}
-	if m.width > 120 {
+	if m.mainWidth() > 120 {
 		nameWidth = 40
 	}
 
-	rowWidth := m.width - 6
+	rowWidth := m.mainWidth() - 6
 	if rowWidth < 60 {
 		rowWidth = 60
 	}
@@ -275,7 +276,7 @@ func (m Model) renderEventsSection() string {
 		return b.String()
 	}
 
-	maxMsgLen := m.width - 25
+	maxMsgLen := m.mainWidth() - 25
 	if maxMsgLen < 30 {
 		maxMsgLen = 30
 	}

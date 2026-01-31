@@ -127,7 +127,7 @@ All interfaces defined in consumer package. Implementations use compile-time che
 var _ EventEmitter = (*Manager)(nil)
 ```
 
-Full interface contracts in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` section 7.
+Full interface contracts in `_bmad-output/planning-artifacts/ARCHITECTURE.md` section 7.
 
 ---
 
@@ -141,7 +141,7 @@ Full interface contracts in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTU
 | `Migration` | `pkg/types/migration.go` | Owner, FromNode, ToNode, OldPod, NewPod |
 | `Event` | `pkg/types/event.go` | Type, Severity, Message, Timestamp |
 
-Full type definitions in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` section 6.
+Full type definitions in `_bmad-output/planning-artifacts/ARCHITECTURE.md` section 6.
 
 ---
 
@@ -219,7 +219,7 @@ Tokyo Night palette defined in `internal/tui/styles.go` and `style/tui/tokyo-nig
 | ADR-006 | Single source of truth for stages | Prevents drift, TUI is display-only |
 | ADR-007 | Auto-detect target version | Infer from highest version, `--target-version` override |
 
-Full ADR details in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` section 12.
+Full ADR details in `_bmad-output/planning-artifacts/ARCHITECTURE.md` section 12.
 
 ---
 
@@ -253,16 +253,24 @@ Full ADR details in `_bmad-output/planning-artifacts/kupgrade/ARCHITECTURE.md` s
 When implementing changes:
 
 1. **Read this file first** - Understand constraints before coding
-2. **Check REFACTOR_PLAN.md** - See `_bmad-output/planning-artifacts/kupgrade/`
+2. **Check story files** - See `_bmad-output/implementation-artifacts/` for active work
 3. **Follow Google Go Style** - See `style/go/decisions.md` for specific rules
 4. **Run verification** - `go build ./...` and `go vet ./...` before completing
 5. **Keep TUI dumb** - Any logic changes go in watcher, not TUI
+
+### Before Each Feature (Complexity Check)
+
+Before implementing any feature, ask:
+
+1. **What problem am I actually solving?**
+2. **Is this the simplest solution to the problem?**
+3. **What am I giving up by adding this complexity?**
 
 ### After Each Feature (Winston's Rule)
 
 After completing any feature implementation:
 
-1. **Update ARCHITECTURE.md** - See `_bmad-output/planning-artifacts/kupgrade/`
-2. **Update ROADMAP.md** - See `_bmad-output/planning-artifacts/kupgrade/`
+1. **Update ARCHITECTURE.md** - See `_bmad-output/planning-artifacts/`
+2. **Update ROADMAP.md** - See `_bmad-output/planning-artifacts/`
 3. **Update this file** - If new patterns, types, or rules emerge
 4. **Keep docs current** - Outdated docs mislead future AI agents

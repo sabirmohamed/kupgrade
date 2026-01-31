@@ -12,35 +12,32 @@ func (m Model) View() string {
 		return fmt.Sprintf("Error: %v\n", m.fatalError)
 	}
 
-	// Render the current screen
-	var content string
-	switch m.screen {
-	case ScreenOverview:
-		content = m.renderOverview()
-	case ScreenNodes:
-		content = m.renderNodesScreen()
-	case ScreenDrains:
-		content = m.renderDrainsScreen()
-	case ScreenPods:
-		content = m.renderPodsScreen()
-	case ScreenBlockers:
-		content = m.renderBlockersScreen()
-	case ScreenEvents:
-		content = m.renderEventsScreen()
-	case ScreenStats:
-		content = m.renderStatsScreen()
-	default:
-		content = m.renderOverview()
+	// Overlays take priority (full screen)
+	if m.overlay == OverlayHelp {
+		return m.renderWithOverlay(m.renderHelpOverlay())
+	}
+	if m.overlay == OverlayDetail {
+		return m.renderWithOverlay(m.renderDetailOverlay())
 	}
 
-	// Render overlay on top if active
-	switch m.overlay {
-	case OverlayHelp:
-		return m.renderWithOverlay(m.renderHelpOverlay())
-	case OverlayNodeDetail:
-		return m.renderWithOverlay(m.renderNodeDetailOverlay())
+	// Render the current screen
+	switch m.screen {
+	case ScreenOverview:
+		return m.renderOverview()
+	case ScreenNodes:
+		return m.renderNodesScreen()
+	case ScreenDrains:
+		return m.renderDrainsScreen()
+	case ScreenPods:
+		return m.renderPodsScreen()
+	case ScreenBlockers:
+		return m.renderBlockersScreen()
+	case ScreenEvents:
+		return m.renderEventsScreen()
+	case ScreenStats:
+		return m.renderStatsScreen()
 	default:
-		return content
+		return m.renderOverview()
 	}
 }
 
@@ -49,10 +46,11 @@ func (m Model) renderWithOverlay(overlay string) string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 }
 
-// placeContent places content in the terminal dimensions
+// placeContent places content in the available main area dimensions
 func (m Model) placeContent(content string) string {
-	if m.width > 0 && m.height > 0 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, content)
+	w := m.mainWidth()
+	if w > 0 && m.height > 0 {
+		return lipgloss.Place(w, m.height, lipgloss.Left, lipgloss.Top, content)
 	}
 	return content
 }

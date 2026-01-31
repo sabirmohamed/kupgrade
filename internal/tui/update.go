@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
+	"k8s.io/kubectl/pkg/describe"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -21,6 +24,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.help.Width = msg.Width
+		if m.overlay == OverlayDetail {
+			m.resizeDetailViewport()
+		}
+		return m, nil
+
+	case DescribeMsg:
+		if msg.Err != nil {
+			m.detailViewport.SetContent("Error: " + msg.Err.Error())
+		} else {
+			m.detailViewport.SetContent(msg.Content)
+		}
+		m.detailViewport.GotoTop()
 		return m, nil
 
 	case NodeUpdateMsg:
@@ -115,11 +130,44 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleOverlayKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Detail overlay: Esc/q closes, j/k/arrows scroll viewport
+	if m.overlay == OverlayDetail {
+		if key.Matches(msg, m.keys.Escape) || key.Matches(msg, m.keys.Quit) {
+			m.overlay = OverlayNone
+			return *m, nil
+		}
+		if key.Matches(msg, m.keys.Down) {
+			m.detailViewport.LineDown(1)
+			return *m, nil
+		}
+		if key.Matches(msg, m.keys.Up) {
+			m.detailViewport.LineUp(1)
+			return *m, nil
+		}
+		if key.Matches(msg, m.keys.PageDown) {
+			m.detailViewport.HalfViewDown()
+			return *m, nil
+		}
+		if key.Matches(msg, m.keys.PageUp) {
+			m.detailViewport.HalfViewUp()
+			return *m, nil
+		}
+		if key.Matches(msg, m.keys.Top) {
+			m.detailViewport.GotoTop()
+			return *m, nil
+		}
+		if key.Matches(msg, m.keys.Bottom) {
+			m.detailViewport.GotoBottom()
+			return *m, nil
+		}
+		return *m, nil
+	}
+
+	// Help overlay: any key closes
 	if key.Matches(msg, m.keys.Escape) || key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Help) {
 		m.overlay = OverlayNone
 		return *m, nil
 	}
-	// For Help overlay, also close on any other key
 	if m.overlay == OverlayHelp {
 		m.overlay = OverlayNone
 		return *m, nil
@@ -159,11 +207,12 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	if key.Matches(msg, m.keys.Enter) {
+	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
 		if m.listIndex < len(allNodes) {
 			nodeName := allNodes[m.listIndex]
 			if _, ok := m.nodes[nodeName]; ok {
-				m.overlay = OverlayNodeDetail
+				cmd := m.openDetail(DetailNode, nodeName)
+				return *m, cmd
 			}
 		}
 		return *m, nil
@@ -173,14 +222,40 @@ func (m *Model) handleOverviewKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleNodesKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
+		nodes := m.sortedNodeNames()
+		if m.listIndex < len(nodes) {
+			cmd := m.openDetail(DetailNode, nodes[m.listIndex])
+			return *m, cmd
+		}
+		return *m, nil
+	}
 	return m.handleListNavigation(msg, len(m.nodes))
 }
 
 func (m *Model) handleDrainsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
+		drainNodes := m.getDrainNodes()
+		if m.listIndex < len(drainNodes) {
+			cmd := m.openDetail(DetailNode, drainNodes[m.listIndex])
+			return *m, cmd
+		}
+		return *m, nil
+	}
 	return m.handleListNavigation(msg, len(m.getDrainNodes()))
 }
 
 func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
+		podList := m.getFilteredPodList()
+		if m.listIndex < len(podList) {
+			pod := podList[m.listIndex]
+			podKey := pod.Namespace + "/" + pod.Name
+			cmd := m.openDetail(DetailPod, podKey)
+			return *m, cmd
+		}
+		return *m, nil
+	}
 	return m.handleListNavigation(msg, m.filteredPodCount())
 }
 
@@ -190,27 +265,51 @@ func (m *Model) filteredPodCount() int {
 }
 
 func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Enter/d on a blocker opens the associated node detail
+	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
+		if m.listIndex < len(m.blockers) {
+			blocker := m.blockers[m.listIndex]
+			if blocker.NodeName != "" {
+				cmd := m.openDetail(DetailNode, blocker.NodeName)
+				return *m, cmd
+			}
+		}
+		return *m, nil
+	}
 	return m.handleListNavigation(msg, len(m.blockers))
 }
 
 func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Event filter toggles
+	// Enter/d opens event detail overlay
+	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
+		events := m.filteredEvents()
+		if m.listIndex < len(events) {
+			cmd := m.openDetail(DetailEvent, eventKey(events[m.listIndex]))
+			return *m, cmd
+		}
+		return *m, nil
+	}
+
+	// Event filter toggles (close detail overlay since filtered list changes)
 	if key.Matches(msg, m.keys.EventUpgrade) {
 		m.eventFilter = EventFilterUpgrade
 		m.listIndex = 0
+		m.overlay = OverlayNone
 		return *m, nil
 	}
 	if key.Matches(msg, m.keys.EventWarnings) {
 		m.eventFilter = EventFilterWarnings
 		m.listIndex = 0
+		m.overlay = OverlayNone
 		return *m, nil
 	}
 	if key.Matches(msg, m.keys.EventAll) {
 		m.eventFilter = EventFilterAll
 		m.listIndex = 0
+		m.overlay = OverlayNone
 		return *m, nil
 	}
-	// Aggregation toggle
+	// Aggregation toggle (g key — intentionally shadows Top binding on events screen)
 	if key.Matches(msg, m.keys.EventAggregate) {
 		m.eventAggregated = !m.eventAggregated
 		m.expandedGroup = ""
@@ -306,6 +405,10 @@ func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.
 func (m *Model) handleNodeUpdate(node types.NodeState) {
 	if node.Deleted {
 		delete(m.nodes, node.Name)
+		// Clamp listIndex to avoid out-of-bounds after deletion
+		if count := len(m.nodes); m.listIndex >= count && count > 0 {
+			m.listIndex = count - 1
+		}
 	} else {
 		m.nodes[node.Name] = node
 	}
@@ -401,6 +504,43 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 		}
 	}
 	return *m, nil
+}
+
+// fetchDescribe returns a tea.Cmd that asynchronously calls kubectl describe
+func (m Model) fetchDescribe() tea.Cmd {
+	dt := m.detailType
+	key := m.detailKey
+	clientset := m.config.Clientset
+
+	return func() tea.Msg {
+		if clientset == nil {
+			return DescribeMsg{Err: fmt.Errorf("no kubernetes client")}
+		}
+
+		settings := describe.DescriberSettings{ShowEvents: true}
+		var output string
+		var err error
+
+		switch dt {
+		case DetailNode:
+			d := &describe.NodeDescriber{Interface: clientset}
+			output, err = d.Describe("", key, settings)
+		case DetailPod:
+			parts := strings.SplitN(key, "/", 2)
+			if len(parts) != 2 {
+				return DescribeMsg{Err: fmt.Errorf("invalid pod key: %s", key)}
+			}
+			d := &describe.PodDescriber{Interface: clientset}
+			output, err = d.Describe(parts[0], parts[1], settings)
+		default:
+			return DescribeMsg{Err: fmt.Errorf("unsupported detail type")}
+		}
+
+		if err != nil {
+			return DescribeMsg{Err: err}
+		}
+		return DescribeMsg{Content: output}
+	}
 }
 
 // currentListCount returns the item count for the current list screen

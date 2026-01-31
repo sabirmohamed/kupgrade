@@ -44,7 +44,7 @@ func (m Model) renderDrainsTable(drainNodes []string) string {
 	}
 	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(drainNodes))
 
-	tableWidth := m.width - 2
+	tableWidth := m.mainWidth() - 2
 	if tableWidth < 80 {
 		tableWidth = 80
 	}
@@ -119,8 +119,10 @@ func (m Model) renderDrainsTable(drainNodes []string) string {
 	rendered := t.String()
 
 	if len(drainNodes) > visibleRows {
-		pos := fmt.Sprintf(" %d/%d", m.listIndex+1, len(drainNodes))
+		pos := fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(drainNodes))
 		rendered += "\n" + footerDescStyle.Render(pos)
+	} else if len(drainNodes) > 0 {
+		rendered += "\n" + footerDescStyle.Render(" d describe")
 	}
 
 	return rendered

@@ -19,6 +19,9 @@ type keyMap struct {
 	Bottom   key.Binding
 	PageUp   key.Binding
 	PageDown key.Binding
+	// Detail
+	Describe key.Binding
+	Tab      key.Binding
 	// Event filtering
 	EventUpgrade   key.Binding
 	EventWarnings  key.Binding
@@ -65,7 +68,7 @@ var defaultKeys = keyMap{
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("⏎", "details"),
+		key.WithHelp("⏎", "describe"),
 	),
 	Escape: key.NewBinding(
 		key.WithKeys("esc"),
@@ -90,6 +93,14 @@ var defaultKeys = keyMap{
 	PageDown: key.NewBinding(
 		key.WithKeys("ctrl+d"),
 		key.WithHelp("ctrl+d", "page down"),
+	),
+	Describe: key.NewBinding(
+		key.WithKeys("d"),
+		key.WithHelp("d", "describe"),
+	),
+	Tab: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "focus"),
 	),
 	EventUpgrade: key.NewBinding(
 		key.WithKeys("u"),

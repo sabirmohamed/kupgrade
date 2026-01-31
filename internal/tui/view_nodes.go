@@ -70,7 +70,7 @@ func (m Model) renderNodesTable() string {
 	}
 	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(nodes))
 
-	tableWidth := m.width - 2
+	tableWidth := m.mainWidth() - 2
 	if tableWidth < 80 {
 		tableWidth = 80
 	}
@@ -144,10 +144,12 @@ func (m Model) renderNodesTable() string {
 
 	rendered := t.String()
 
-	// Show scroll indicator
+	// Show scroll indicator and hint
 	if len(nodes) > visibleRows {
-		pos := fmt.Sprintf(" %d/%d", m.listIndex+1, len(nodes))
+		pos := fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(nodes))
 		rendered += "\n" + footerDescStyle.Render(pos)
+	} else if len(nodes) > 0 {
+		rendered += "\n" + footerDescStyle.Render(" d describe")
 	}
 
 	return rendered
