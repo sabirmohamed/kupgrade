@@ -1,5 +1,7 @@
 # kupgrade
 
+[![golangci-lint](https://img.shields.io/badge/golangci--lint-A+-brightgreen?logo=go)](https://github.com/sabirmohamed/kupgrade/actions/workflows/go.yml)
+
 The complete Kubernetes upgrade lifecycle tool.
 
 **Pre-flight checks. Real-time observation. Post-upgrade reports.**
