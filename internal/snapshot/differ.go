@@ -27,17 +27,25 @@ var unhealthyStatuses = map[string]bool{
 }
 
 // isHealthy returns true if a workload has sufficient ready replicas
-// and no pods in known-bad states. Completed Jobs/CronJobs with all
-// pods in Succeeded state are treated as healthy.
+// and no pods in known-bad states. Workloads where all pods have
+// Succeeded (Jobs, CronJobs, PodTemplates, etc.) are treated as healthy.
 func isHealthy(workload *types.WorkloadSnapshot) bool {
-	// Completed Jobs/CronJobs: all pods Succeeded, none in bad states.
-	if (workload.Kind == "Job" || workload.Kind == "CronJob") && workload.PodStatuses["Succeeded"] > 0 {
+	// Completed workloads: all pods Succeeded, none in bad states.
+	// Covers Jobs, CronJobs, PodTemplates, and any workload with only
+	// Succeeded pods (e.g., AKS eraser image collectors).
+	if workload.PodStatuses["Succeeded"] > 0 {
+		hasOnlySucceeded := true
 		for status := range workload.PodStatuses {
+			if status != "Succeeded" {
+				hasOnlySucceeded = false
+			}
 			if unhealthyStatuses[status] {
 				return false
 			}
 		}
-		return true
+		if hasOnlySucceeded {
+			return true
+		}
 	}
 
 	if workload.DesiredReplicas > 0 && workload.ReadyReplicas < workload.DesiredReplicas {

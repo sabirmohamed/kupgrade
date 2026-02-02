@@ -258,6 +258,26 @@ func TestIsHealthyBasic(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "podtemplate with all succeeded is healthy",
+			workload: types.WorkloadSnapshot{
+				Kind:            "PodTemplate",
+				DesiredReplicas: 9,
+				ReadyReplicas:   0,
+				PodStatuses:     map[string]int{"Succeeded": 9},
+			},
+			expected: true,
+		},
+		{
+			name: "workload with succeeded and running is not auto-healthy",
+			workload: types.WorkloadSnapshot{
+				Kind:            "Deployment",
+				DesiredReplicas: 3,
+				ReadyReplicas:   2,
+				PodStatuses:     map[string]int{"Succeeded": 1, "Running": 2},
+			},
+			expected: false,
+		},
+		{
 			name: "pending pod despite ready count match",
 			workload: types.WorkloadSnapshot{
 				DesiredReplicas: 2,
