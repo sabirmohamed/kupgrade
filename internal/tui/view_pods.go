@@ -19,10 +19,22 @@ func (m Model) renderPodsScreen() string {
 		len(m.nodesByStage[types.StageDraining])+
 		len(m.nodesByStage[types.StageUpgrading]) > 0
 
-	podList := m.getFilteredPodList()
+	stageFiltered := m.getFilteredPodList()
+	totalFiltered := len(stageFiltered)
+
+	var podList []types.PodState
+	if query := m.podSearchInput.Value(); query != "" {
+		podList = fuzzyFilterPods(stageFiltered, query)
+	} else {
+		podList = stageFiltered
+	}
 
 	if len(podList) == 0 {
-		if !upgradeActive {
+		if m.podSearchInput.Value() != "" {
+			b.WriteString(m.renderPodSearchBar(totalFiltered, len(podList)))
+			b.WriteString("\n")
+			b.WriteString(footerDescStyle.Render("  No matches"))
+		} else if !upgradeActive {
 			b.WriteString(footerDescStyle.Render("  No pods found"))
 		} else {
 			b.WriteString(footerDescStyle.Render(fmt.Sprintf("  No pods on %s", m.podFilterLabel())))
@@ -39,7 +51,13 @@ func (m Model) renderPodsScreen() string {
 		if upgradeActive {
 			toggleHint = "  " + footerDescStyle.Render("a cycle filter")
 		}
-		b.WriteString(fmt.Sprintf("  pods(%d)%s%s\n", total, filterNote, toggleHint))
+
+		searchBar := ""
+		if m.podSearchActive || m.podSearchInput.Value() != "" {
+			searchBar = "  " + m.renderPodSearchBar(totalFiltered, total)
+		}
+
+		b.WriteString(fmt.Sprintf("  pods(%d)%s%s%s\n", total, filterNote, toggleHint, searchBar))
 		b.WriteString(m.renderPodsTable(podList))
 	}
 
@@ -63,7 +81,12 @@ func nodeGroupStarts(podList []types.PodState) []bool {
 
 // renderPodsTable renders the pods table using lipgloss/table with per-cell coloring
 func (m Model) renderPodsTable(podList []types.PodState) string {
-	groupStarts := nodeGroupStarts(podList)
+	// Skip node group separators when fuzzy search is active (results are ranked by score)
+	searchActive := m.podSearchInput.Value() != ""
+	var groupStarts []bool
+	if !searchActive {
+		groupStarts = nodeGroupStarts(podList)
+	}
 
 	rows := make([][]string, len(podList))
 	for i, pod := range podList {
@@ -73,6 +96,10 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 	visibleRows := m.height - 10
 	if visibleRows < 5 {
 		visibleRows = 5
+	}
+	// Cap table height to actual row count to prevent lipgloss stretching rows
+	if len(podList) < visibleRows {
+		visibleRows = len(podList)
 	}
 	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(podList))
 
@@ -118,7 +145,8 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 			}
 
 			// Node group separator: top border on first pod of new node group
-			if actualIdx < len(groupStarts) && groupStarts[actualIdx] && actualIdx > 0 {
+			// (only when not in fuzzy search mode)
+			if groupStarts != nil && actualIdx < len(groupStarts) && groupStarts[actualIdx] && actualIdx > 0 {
 				style = style.BorderTop(true).
 					BorderStyle(lipgloss.NormalBorder()).
 					BorderForeground(colorBorderDim)
@@ -167,11 +195,25 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 
 	rendered := t.String()
 
-	if len(podList) > visibleRows {
-		pos := fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(podList))
-		rendered += "\n" + footerDescStyle.Render(pos)
-	} else if len(podList) > 0 {
-		rendered += "\n" + footerDescStyle.Render(" d describe")
+	var hint string
+	if m.podSearchActive {
+		hint = " ↑↓ navigate  Enter commit  Esc cancel"
+	} else if m.podSearchInput.Value() != "" {
+		// Filter committed — normal nav mode
+		if len(podList) > visibleRows {
+			hint = fmt.Sprintf(" %d/%d  •  d describe  •  / search  Esc clear", m.listIndex+1, len(podList))
+		} else {
+			hint = " d describe  •  / search  Esc clear"
+		}
+	} else {
+		if len(podList) > visibleRows {
+			hint = fmt.Sprintf(" %d/%d  •  d describe  •  / search", m.listIndex+1, len(podList))
+		} else {
+			hint = " d describe  •  / search"
+		}
+	}
+	if len(podList) > 0 {
+		rendered += "\n" + footerDescStyle.Render(hint)
 	}
 
 	return rendered
@@ -298,4 +340,15 @@ func probeColor(pod types.PodState) lipgloss.Color {
 		return colorComplete // green
 	}
 	return colorError // red
+}
+
+// renderPodSearchBar renders the fuzzy search input bar
+func (m Model) renderPodSearchBar(totalFiltered, matchCount int) string {
+	if m.podSearchActive {
+		return fmt.Sprintf("> %s  %d/%d",
+			m.podSearchInput.View(), matchCount, totalFiltered)
+	}
+	// Filter is set but input is not focused
+	return fmt.Sprintf("> %s  %d/%d",
+		footerKeyStyle.Render(m.podSearchInput.Value()), matchCount, totalFiltered)
 }

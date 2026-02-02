@@ -30,6 +30,7 @@ type keyMap struct {
 	EventExpand    key.Binding
 	// Pod filtering
 	PodFilter key.Binding
+	PodSearch key.Binding
 }
 
 // ShortHelp returns key bindings for the short help view (footer).
@@ -42,7 +43,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Enter, k.PageUp, k.PageDown},
-		{k.Top, k.Bottom},
+		{k.Top, k.Bottom, k.PodSearch},
 		{k.Help, k.Escape, k.Quit},
 	}
 }
@@ -127,6 +128,10 @@ var defaultKeys = keyMap{
 	PodFilter: key.NewBinding(
 		key.WithKeys("a"),
 		key.WithHelp("a", "cycle filter"),
+	),
+	PodSearch: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
 	),
 }
 

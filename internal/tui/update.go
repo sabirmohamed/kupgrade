@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 	"k8s.io/kubectl/pkg/describe"
@@ -95,9 +96,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Escape: return to Overview
+	// Escape: clear pod search filter if set, otherwise return to Overview
 	if key.Matches(msg, m.keys.Escape) {
+		if m.screen == ScreenPods && m.podSearchInput.Value() != "" {
+			m.clearPodSearch()
+			m.listIndex = 0
+			return *m, nil
+		}
 		m.screen = ScreenOverview
+		m.clearPodSearch()
 		return *m, nil
 	}
 
@@ -105,6 +112,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if screen := screenFromKey(msg); screen >= 0 {
 		m.screen = screen
 		m.listIndex = 0 // Reset list position on screen change
+		m.clearPodSearch()
 		return *m, nil
 	}
 
@@ -244,8 +252,13 @@ func (m *Model) handleDrainsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	// When search input is active, forward keys to textinput
+	if m.podSearchActive {
+		return m.handlePodSearchKey(msg)
+	}
+
 	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
-		podList := m.getFilteredPodList()
+		podList := m.getDisplayPodList()
 		if m.listIndex < len(podList) {
 			pod := podList[m.listIndex]
 			podKey := pod.Namespace + "/" + pod.Name
@@ -259,12 +272,87 @@ func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.listIndex = 0
 		return *m, nil
 	}
-	return m.handleListNavigation(msg, m.filteredPodCount())
+	if key.Matches(msg, m.keys.PodSearch) {
+		m.podSearchActive = true
+		m.podSearchInput.Focus()
+		m.listIndex = 0
+		return *m, textinput.Blink
+	}
+	return m.handleListNavigation(msg, m.displayPodCount())
 }
 
-// filteredPodCount returns count of pods on upgrading nodes (or all if none upgrading)
-func (m *Model) filteredPodCount() int {
-	return len(m.getFilteredPodList())
+// handlePodSearchKey handles key events when the pod search input is active.
+// Only arrow keys and ctrl-sequences navigate the list — all printable keys
+// (including vim j/k/g/G) go to the textinput so users can type freely.
+func (m *Model) handlePodSearchKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	itemCount := m.displayPodCount()
+
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.podSearchActive = false
+		m.podSearchInput.SetValue("")
+		m.podSearchInput.Blur()
+		m.listIndex = 0
+		return *m, nil
+
+	case tea.KeyEnter:
+		// Commit filter, return to normal navigation
+		m.podSearchActive = false
+		m.podSearchInput.Blur()
+		m.listIndex = 0
+		return *m, nil
+
+	case tea.KeyUp:
+		if m.listIndex > 0 {
+			m.listIndex--
+		}
+		return *m, nil
+
+	case tea.KeyDown:
+		if m.listIndex < itemCount-1 {
+			m.listIndex++
+		}
+		return *m, nil
+
+	case tea.KeyPgUp, tea.KeyCtrlU:
+		pageSize := m.height - 10
+		if pageSize < 5 {
+			pageSize = 5
+		}
+		m.listIndex -= pageSize
+		if m.listIndex < 0 {
+			m.listIndex = 0
+		}
+		return *m, nil
+
+	case tea.KeyPgDown, tea.KeyCtrlD:
+		pageSize := m.height - 10
+		if pageSize < 5 {
+			pageSize = 5
+		}
+		m.listIndex += pageSize
+		if m.listIndex >= itemCount {
+			m.listIndex = itemCount - 1
+		}
+		if m.listIndex < 0 {
+			m.listIndex = 0
+		}
+		return *m, nil
+	}
+
+	// All other keys (printable characters) → textinput
+	prevValue := m.podSearchInput.Value()
+	var cmd tea.Cmd
+	m.podSearchInput, cmd = m.podSearchInput.Update(msg)
+	if m.podSearchInput.Value() != prevValue {
+		m.listIndex = 0
+	}
+	return *m, cmd
+}
+
+// displayPodCount returns count of pods after both stage filter and fuzzy search
+func (m *Model) displayPodCount() int {
+	return len(m.getDisplayPodList())
 }
 
 func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -549,7 +637,7 @@ func (m *Model) currentListCount() int {
 	case ScreenDrains:
 		return len(m.getDrainNodes())
 	case ScreenPods:
-		return m.filteredPodCount()
+		return m.displayPodCount()
 	case ScreenBlockers:
 		return len(m.blockers)
 	case ScreenEvents:

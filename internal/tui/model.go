@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -105,6 +106,8 @@ type Model struct {
 	eventAggregated bool          // Whether to show aggregated events
 	expandedGroup   string        // Currently expanded event group (reason)
 	podFilterMode   PodFilterMode // Pod view filter mode (disrupting/rescheduled/all)
+	podSearchActive bool          // Whether fuzzy search input is active
+	podSearchInput  textinput.Model
 
 	// Data (display only - no computation)
 	nodes        map[string]types.NodeState
@@ -176,6 +179,11 @@ func New(cfg Config) Model {
 
 	vp := viewport.New(0, 0) // Sized on first WindowSizeMsg
 
+	ti := textinput.New()
+	ti.Placeholder = "type to filter pods..."
+	ti.CharLimit = 64
+	ti.Width = 30
+
 	m := Model{
 		config:         cfg,
 		keys:           defaultKeys,
@@ -189,6 +197,7 @@ func New(cfg Config) Model {
 		migrations:     make([]types.Migration, 0, maxMigrations),
 		blockers:       make([]types.Blocker, 0),
 		currentTime:    time.Now(),
+		podSearchInput: ti,
 		spinner:        sp,
 		progress:       prog,
 		smallProg:      smallProg,

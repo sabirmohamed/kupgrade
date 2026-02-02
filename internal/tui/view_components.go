@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
+	"github.com/sahilm/fuzzy"
 )
 
 // renderCompactHeader renders compact header for overview screen
@@ -238,4 +239,42 @@ func (m *Model) getDrainNodes() []string {
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageUpgrading]...)
 	sort.Strings(drainNodes)
 	return drainNodes
+}
+
+// getDisplayPodList returns pods after both stage filter and fuzzy search
+func (m *Model) getDisplayPodList() []types.PodState {
+	podList := m.getFilteredPodList()
+	query := m.podSearchInput.Value()
+	if query == "" {
+		return podList
+	}
+	return fuzzyFilterPods(podList, query)
+}
+
+// fuzzyFilterPods filters pods using fuzzy matching against name, namespace, node, and status
+func fuzzyFilterPods(pods []types.PodState, query string) []types.PodState {
+	source := make(podSearchSource, len(pods))
+	for i, pod := range pods {
+		source[i] = pod.Namespace + "/" + pod.Name + " " + pod.NodeName + " " + pod.Phase
+	}
+
+	matches := fuzzy.FindFrom(query, source)
+	result := make([]types.PodState, len(matches))
+	for i, match := range matches {
+		result[i] = pods[match.Index]
+	}
+	return result
+}
+
+// podSearchSource implements fuzzy.Source for pod searching
+type podSearchSource []string
+
+func (s podSearchSource) String(i int) string { return s[i] }
+func (s podSearchSource) Len() int            { return len(s) }
+
+// clearPodSearch resets the pod search state
+func (m *Model) clearPodSearch() {
+	m.podSearchActive = false
+	m.podSearchInput.SetValue("")
+	m.podSearchInput.Blur()
 }
