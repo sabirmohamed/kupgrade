@@ -79,5 +79,5 @@ func nodeConditionSummary(node *corev1.Node) string {
 	if len(parts) == 0 {
 		return "Ready condition missing"
 	}
-	return fmt.Sprintf("%s", strings.Join(parts, ", "))
+	return strings.Join(parts, ", ")
 }

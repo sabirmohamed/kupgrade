@@ -20,8 +20,8 @@ func NewSnapshotCmd(configFlags *genericclioptions.ConfigFlags) *cobra.Command {
 		Short: "Capture cluster workload state for upgrade comparison",
 		Long: `Capture a point-in-time snapshot of all workloads, nodes, and PDBs in the cluster.
 
-Run before upgrading to establish a baseline. After upgrading, run again and use
-'kupgrade snapshot --compare' to diff before/after and identify upgrade-caused issues.
+Run before upgrading to establish a baseline. After upgrading, use
+'kupgrade report' to diff before/after and identify upgrade-caused issues.
 
 Snapshots are saved to ~/.kupgrade/snapshots/ by default.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

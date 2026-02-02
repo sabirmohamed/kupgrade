@@ -28,16 +28,24 @@ func DefaultDir() (string, error) {
 	return filepath.Join(home, snapshotDirName, snapshotSubDir), nil
 }
 
+// sanitizeContext replaces filesystem-unsafe characters with dashes.
+// Used by both Filename (store) and FindLatest (finder) to ensure
+// consistent naming.
+func sanitizeContext(contextName string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return '-'
+		default:
+			return r
+		}
+	}, contextName)
+}
+
 // Filename generates a snapshot filename from context and timestamp.
 // Format: <context>-<timestamp>.json
 func Filename(clusterContext string, timestamp time.Time) string {
-	// Sanitize context name for filesystem safety.
-	safe := strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
-			return '-'
-		}
-		return r
-	}, clusterContext)
+	safe := sanitizeContext(clusterContext)
 	return fmt.Sprintf("%s-%s.json", safe, timestamp.Format(timestampFormat))
 }
 

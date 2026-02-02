@@ -89,7 +89,7 @@ func runCheck(ctx context.Context, configFlags *genericclioptions.ConfigFlags, t
 
 	// Format and print results.
 	output := formatter.New(outputFormat)
-	fmt.Print(output.FormatReport(report))
+	fmt.Print(output.FormatCheckReport(report))
 
 	// Capture snapshot regardless of check results — SREs want baselines
 	// even with blocking issues for before/after comparison.

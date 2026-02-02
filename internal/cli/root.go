@@ -25,6 +25,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(NewWatchCmd(configFlags))
 	cmd.AddCommand(NewCheckCmd(configFlags))
 	cmd.AddCommand(NewSnapshotCmd(configFlags))
+	cmd.AddCommand(NewReportCmd(configFlags))
 	cmd.AddCommand(NewVersionCmd())
 
 	return cmd
