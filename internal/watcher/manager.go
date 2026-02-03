@@ -67,7 +67,7 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 
 	// Create watchers
 	m.podWatcher = NewPodWatcher(factory, namespace, m, stages, migrations)
-	m.nodeWatcher = NewNodeWatcher(factory, m, stages, m.countPodsOnNode)
+	m.nodeWatcher = NewNodeWatcher(factory, m, stages, m.countPodsOnNode, m.countEvictablePodsOnNode)
 	m.eventWatcher = NewEventWatcher(factory, namespace, m)
 	m.pdbWatcher = NewPDBWatcher(factory, namespace, m)
 
@@ -230,12 +230,30 @@ func (m *Manager) InitialBlockers() []types.Blocker {
 	return m.pdbWatcher.buildBlockers()
 }
 
-// countPodsOnNode counts evictable pods on a node (excludes DaemonSets)
-// DaemonSet pods are ignored by `kubectl drain --ignore-daemonsets`
+// countPodsOnNode counts all pods on a node (for display in overview/nodes).
 func (m *Manager) countPodsOnNode(nodeName string) int {
 	count := 0
 	for _, obj := range m.podWatcher.informer.GetStore().List() {
-		pod := obj.(*corev1.Pod)
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			continue
+		}
+		if pod.Spec.NodeName == nodeName {
+			count++
+		}
+	}
+	return count
+}
+
+// countEvictablePodsOnNode counts non-DaemonSet pods on a node (for drain progress).
+// DaemonSet pods are ignored by `kubectl drain --ignore-daemonsets`.
+func (m *Manager) countEvictablePodsOnNode(nodeName string) int {
+	count := 0
+	for _, obj := range m.podWatcher.informer.GetStore().List() {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			continue
+		}
 		if pod.Spec.NodeName == nodeName && !isDaemonSetPod(pod) {
 			count++
 		}

@@ -15,16 +15,17 @@ const (
 
 // NodeState holds the current state of a node relevant to upgrades
 type NodeState struct {
-	Name        string
-	Stage       NodeStage
-	Version     string
-	Ready       bool
-	Schedulable bool
-	PodCount    int
-	Deleted     bool // true when node was deleted
+	Name              string
+	Stage             NodeStage
+	Version           string
+	Ready             bool
+	Schedulable       bool
+	PodCount          int  // Total pods on node (for display)
+	EvictablePodCount int  // Non-DaemonSet pods (for drain progress)
+	Deleted           bool // true when node was deleted
 
 	// Phase 2 fields
-	InitialPodCount int
+	InitialPodCount int // Evictable pods when drain started
 	DrainProgress   int
 	Blocked         bool
 	BlockerReason   string

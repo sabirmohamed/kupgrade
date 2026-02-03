@@ -111,14 +111,14 @@ func (m Model) renderDrainProgressSection() string {
 		b.WriteString(warningStyle.Render(title))
 		b.WriteString("\n")
 
-		// Progress bar
-		evicted := node.InitialPodCount - node.PodCount
+		// Drain progress uses evictable pods (excludes DaemonSets)
+		evicted := node.InitialPodCount - node.EvictablePodCount
 		if evicted < 0 {
 			evicted = 0
 		}
 		total := node.InitialPodCount
 		if total == 0 {
-			total = node.PodCount
+			total = node.EvictablePodCount
 		}
 
 		// Progress bar
