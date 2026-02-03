@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 type BlockerType string
 
 const (
@@ -13,6 +15,8 @@ type Blocker struct {
 	Name      string
 	Namespace string // PDB namespace
 	Detail    string
-	NodeName  string
-	Cleared   bool // true when blocker is resolved
+	NodeName  string    // Node being blocked (required for accurate display)
+	PodName   string    // Pod that can't be evicted
+	StartTime time.Time // When blocking started (for duration display)
+	Cleared   bool      // true when blocker is resolved
 }

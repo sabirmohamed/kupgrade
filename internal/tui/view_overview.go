@@ -68,13 +68,25 @@ func (m Model) renderBlockersSection() string {
 
 		nameStr := fmt.Sprintf("%s %s", blocker.Type, warningStyle.Render(name))
 
-		result := ""
-		constraint := blocker.Detail
-		if blocker.Detail != "" {
-			result = errorStyle.Render("→ 0 evictions allowed")
+		// Show which node is blocked
+		nodeStr := ""
+		if blocker.NodeName != "" {
+			nodeStr = fmt.Sprintf(" blocking %s", blocker.NodeName)
 		}
 
-		line := fmt.Sprintf("%s    %s    %s", nameStr, footerDescStyle.Render(constraint), result)
+		// Show duration
+		durationStr := ""
+		if !blocker.StartTime.IsZero() {
+			duration := m.currentTime.Sub(blocker.StartTime)
+			durationStr = fmt.Sprintf(" (%s)", formatDuration(duration))
+		}
+
+		constraint := blocker.Detail
+		if constraint == "" {
+			constraint = "eviction blocked"
+		}
+
+		line := fmt.Sprintf("%s    %s%s%s", nameStr, footerDescStyle.Render(constraint), nodeStr, errorStyle.Render(durationStr))
 		lines = append(lines, line)
 	}
 

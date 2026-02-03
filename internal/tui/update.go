@@ -513,28 +513,57 @@ func (m *Model) handlePodUpdate(pod types.PodState) {
 	}
 }
 
-// handleBlockerUpdate adds or removes blockers
+// handleBlockerUpdate adds or removes blockers.
+// Blocker key includes NodeName for per-node tracking (same PDB can block multiple nodes).
+// If Cleared blocker has empty NodeName, removes all blockers for that PDB (e.g., PDB deleted).
 func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
-	blockerKey := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name
+	// Build key function - includes NodeName for per-node tracking
+	makeKey := func(b types.Blocker) string {
+		return string(b.Type) + "/" + b.Namespace + "/" + b.Name + "/" + b.NodeName
+	}
+
+	blockerKey := makeKey(blocker)
 
 	if blocker.Cleared {
-		for i, b := range m.blockers {
-			key := string(b.Type) + "/" + b.Namespace + "/" + b.Name
-			if key == blockerKey {
-				m.blockers = append(m.blockers[:i], m.blockers[i+1:]...)
-				return
+		if blocker.NodeName == "" {
+			// Clear all blockers for this PDB (PDB was deleted)
+			baseKey := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name + "/"
+			filtered := m.blockers[:0]
+			for _, b := range m.blockers {
+				key := makeKey(b)
+				if len(key) < len(baseKey) || key[:len(baseKey)] != baseKey {
+					filtered = append(filtered, b)
+				}
+			}
+			m.blockers = filtered
+		} else {
+			// Clear specific node's blocker
+			for i, b := range m.blockers {
+				if makeKey(b) == blockerKey {
+					m.blockers = append(m.blockers[:i], m.blockers[i+1:]...)
+					return
+				}
 			}
 		}
-	} else {
-		for i, b := range m.blockers {
-			key := string(b.Type) + "/" + b.Namespace + "/" + b.Name
-			if key == blockerKey {
-				m.blockers[i] = blocker
-				return
-			}
-		}
-		m.blockers = append(m.blockers, blocker)
+		return
 	}
+
+	// Update existing or add new
+	for i, b := range m.blockers {
+		if makeKey(b) == blockerKey {
+			// Update existing - preserve StartTime if already set
+			if !blocker.StartTime.IsZero() {
+				m.blockers[i] = blocker
+			} else if !b.StartTime.IsZero() {
+				blocker.StartTime = b.StartTime
+				m.blockers[i] = blocker
+			} else {
+				m.blockers[i] = blocker
+			}
+			return
+		}
+	}
+	m.blockers = append(m.blockers, blocker)
 }
 
 // handleEvent adds event to display list

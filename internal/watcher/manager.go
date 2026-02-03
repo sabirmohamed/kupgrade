@@ -7,6 +7,9 @@ import (
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 )
@@ -18,8 +21,9 @@ const (
 	blockerBufferSize   = 50
 )
 
-// Compile-time interface check
+// Compile-time interface checks
 var _ EventEmitter = (*Manager)(nil)
+var _ BlockerDetector = (*Manager)(nil)
 
 // Manager coordinates all watchers and emits events
 type Manager struct {
@@ -66,6 +70,9 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 	m.nodeWatcher = NewNodeWatcher(factory, m, stages, m.countPodsOnNode)
 	m.eventWatcher = NewEventWatcher(factory, namespace, m)
 	m.pdbWatcher = NewPDBWatcher(factory, namespace, m)
+
+	// Wire up blocker detection (event watcher needs access to pod and PDB data)
+	m.eventWatcher.SetBlockerDetector(m)
 
 	return m
 }
@@ -249,4 +256,66 @@ func isDaemonSetPod(pod *corev1.Pod) bool {
 // WaitForCacheSync waits for all caches to sync
 func WaitForCacheSync(ctx context.Context, syncFuncs ...cache.InformerSynced) bool {
 	return cache.WaitForCacheSync(ctx.Done(), syncFuncs...)
+}
+
+// BlockerDetector implementation
+
+// GetPodNode returns the node name for a pod, empty if not found.
+func (m *Manager) GetPodNode(namespace, name string) string {
+	key := namespace + "/" + name
+	obj, exists, err := m.podWatcher.informer.GetStore().GetByKey(key)
+	if err != nil || !exists {
+		return ""
+	}
+	pod := obj.(*corev1.Pod)
+	return pod.Spec.NodeName
+}
+
+// GetPod returns the pod object, nil if not found.
+func (m *Manager) GetPod(namespace, name string) *corev1.Pod {
+	key := namespace + "/" + name
+	obj, exists, err := m.podWatcher.informer.GetStore().GetByKey(key)
+	if err != nil || !exists {
+		return nil
+	}
+	return obj.(*corev1.Pod)
+}
+
+// FindBlockingPDB finds a PDB that matches the given pod and has 0 disruption budget.
+// Returns namespace, name, detail. Empty strings if no blocking PDB found.
+func (m *Manager) FindBlockingPDB(pod *corev1.Pod) (namespace, name, detail string) {
+	if pod == nil {
+		return "", "", ""
+	}
+
+	podLabels := labels.Set(pod.Labels)
+
+	// Iterate through all PDBs to find one that matches this pod
+	for _, obj := range m.pdbWatcher.informer.GetStore().List() {
+		pdb := obj.(*policyv1.PodDisruptionBudget)
+
+		// PDB must be in same namespace as pod
+		if pdb.Namespace != pod.Namespace {
+			continue
+		}
+
+		// Check if PDB is blocking (0 disruptions allowed)
+		if pdb.Status.DisruptionsAllowed > 0 {
+			continue
+		}
+
+		// Check if PDB selector matches pod
+		selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+		if err != nil {
+			continue
+		}
+
+		if selector.Matches(podLabels) {
+			// Found a blocking PDB that matches this pod
+			detail := m.pdbWatcher.GetPDBDetail(pdb.Namespace, pdb.Name)
+			return pdb.Namespace, pdb.Name, detail
+		}
+	}
+
+	return "", "", ""
 }
