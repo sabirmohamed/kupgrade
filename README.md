@@ -1,199 +1,207 @@
 # kupgrade
 
+Watch your Kubernetes cluster while it upgrades. One binary, one command, everything you need to see.
+
+[![Go Report Card](https://goreportcard.com/badge/github.com/sabirmohamed/kupgrade)](https://goreportcard.com/report/github.com/sabirmohamed/kupgrade)
 [![golangci-lint](https://img.shields.io/badge/golangci--lint-A+-brightgreen?logo=go)](https://github.com/sabirmohamed/kupgrade/actions/workflows/go.yml)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
-The complete Kubernetes upgrade lifecycle tool.
-
-**Pre-flight checks. Real-time observation. Post-upgrade reports.**
-
+<!-- SCREENSHOT: overview of the TUI during a live upgrade (docs/images/overview.png) -->
 ![kupgrade overview](docs/images/overview.png)
 
 ---
 
-## The Problem
+## Why
 
-During Kubernetes upgrades, you need answers fast:
+When nodes start draining, you're switching between `kubectl get nodes -o wide`, `kubectl get pods -A`, and `kubectl get events` across terminals — or flipping through k9s views trying to keep up.
 
-| Question | kubectl | k9s | kupgrade |
-|----------|---------|-----|----------|
-| Is the upgrade stuck? | `kubectl get nodes` + mental math | Check multiple views | Glance at progress bar |
-| Which PDB is blocking? | `kubectl get pdb -A` + correlate | Search PDBs | Highlighted at top |
-| How long until this node drains? | No visibility | No visibility | ETA with drain velocity |
-| Where did that pod go? | Guess | Search | Migration tracking |
+If you're managing a handful of clusters and upgrading them by hand, kupgrade gives you one screen with the full picture and lets you drill into details when you need them.
 
-kupgrade shows you **exactly what matters during an upgrade** — nothing more, nothing less.
+Real-time updates via Kubernetes informers — no polling
 
 ---
 
-## The Three Questions
+## What it does
 
-kupgrade answers the three questions platform engineers ask during every upgrade:
-
-| Phase | Command | Question |
-|-------|---------|----------|
-| **Before** | `kupgrade check` | "Should I start this upgrade?" |
-| **During** | `kupgrade watch` | "What's happening right now?" |
-| **After** | `kupgrade report` | "What happened?" |
+Three commands for three phases:
 
 ```bash
-# Pre-flight: Check for deprecated APIs, problematic PDBs, unhealthy webhooks
-kupgrade check --target-version v1.32
+# Before: is my cluster ready?
+kupgrade check
 
-# Real-time: Watch the upgrade as it happens
-kupgrade watch --context production
+# During: what's happening right now?
+kupgrade watch
 
-# Post-mortem: Generate upgrade summary
+# After: what broke?
 kupgrade report
 ```
 
----
+### `kupgrade watch` — live upgrade monitoring
 
-## Quick Start
+Point it at your cluster and see what's happening: which nodes are draining, which PDBs are blocking, where pods are moving.
+
+<!-- SCREENSHOT: TUI during active drain showing nodes in different stages (docs/images/watch.png) -->
+
+### `kupgrade snapshot` — capture cluster state
+
+Take a snapshot of your workloads before you start. You'll use this to compare afterwards.
 
 ```bash
-# Install
+$ kupgrade snapshot
+  Collecting cluster state from context "prod-cluster"...
+  Snapshot saved: ~/.kupgrade/snapshots/prod-cluster-2026-02-02T14-54-32.json
+  64 workloads, 9 nodes, 23 PDBs across 21 namespaces
+```
+
+### `kupgrade report` — post-upgrade diff
+
+Compare your snapshot against the live cluster. See what broke during the upgrade and what was already broken before you started.
+
+<!-- SCREENSHOT: terminal output of kupgrade report showing NEW_ISSUE, PRE_EXISTING, RESOLVED sections (docs/images/report.png) -->
+
+This is the part you paste into Slack. The output works without colors — `[NEW_ISSUE]`, `[PRE_EXISTING]`, `[RESOLVED]` read fine in plain text.
+
+### `kupgrade check` — pre-flight validation
+
+Run this before you upgrade. It checks node health and flags anything that could block you.
+
+```bash
+$ kupgrade check
+  ✅ Node Conditions    All 9 nodes Ready
+  ⚠️  Deprecations      2 deprecated APIs found
+  ❌ PDB Health         1 PDB blocking: default/web-pdb (0 disruptions allowed)
+
+  Exit code: 2 (blocking issues found)
+```
+
+---
+
+## Install
+
+```bash
 go install github.com/sabirmohamed/kupgrade@latest
-
-# Watch your cluster upgrade in real-time
-kupgrade watch --context my-cluster
 ```
 
-That's it. You'll see:
-- Node progression through upgrade stages (Ready → Cordoned → Draining → Upgrading → Complete)
-- PDB blockers preventing evictions (with actionable details)
-- Drain progress with elapsed time
-- Pod migrations across nodes
-- Events filtered to upgrade-relevant activity
+Or build from source:
+
+```bash
+git clone https://github.com/sabirmohamed/kupgrade
+cd kupgrade
+go build -o kupgrade ./cmd/kupgrade
+```
 
 ---
 
-## What You'll See
+## Usage
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ ★ kupgrade  prod-cluster  v1.28 → v1.29  ████████░░  62%  14:32:07     │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   READY  →  CORDONED  →  DRAINING  →  UPGRADING  →  COMPLETE           │
-│     1          0            1            0             3                │
-│                                                                         │
-│ ⚠ BLOCKERS (1)                                                         │
-│   PDB default/redis-pdb    minAvailable=2 → 0 evictions allowed        │
-│                                                                         │
-│ ◐ DRAINING: node-abc123                                                │
-│   ████████████░░░░  18/24 pods evicted    Elapsed: 4m 12s              │
-│                                                                         │
-│ NODES (5)                                                              │
-│ ► node-abc123    18 pods   v1.28   DRAINING                            │
-│   node-def456    12 pods   v1.29   COMPLETE                            │
-│   node-ghi789     8 pods   v1.28   READY                               │
-│                                                                         │
-├─────────────────────────────────────────────────────────────────────────┤
-│ [d]etails  [b]lockers  [e]vents  [?]help  [q]uit                       │
-└─────────────────────────────────────────────────────────────────────────┘
+```bash
+kupgrade                    # Full TUI experience
+kupgrade --context prod     # Specific cluster
+
+# For scripting/CI
+kupgrade check              # Pre-flight validation (exit code 0/1)
+kupgrade snapshot           # Save pre-upgrade baseline
+kupgrade report             # Post-upgrade diff
+kupgrade report --format json
 ```
 
-**Information hierarchy:**
-1. Progress — Is the upgrade on track?
-2. Blockers — What needs attention?
-3. Active drains — What's happening now?
-4. Node list — Details on demand
+All standard kubectl flags work (`--context`, `--namespace`, `--kubeconfig`).
 
 ---
 
-## Keyboard Navigation
+## TUI screens
+
+The `watch` command has 6 screens. Press the number keys to switch between them.
+
+| Key | Screen | Shows |
+|-----|--------|-------|
+| `0` | Overview | Progress, stages, blockers, active drains |
+| `1` | Nodes | All nodes with stage, version, pod count |
+| `2` | Pods | Pod states, migrations, restarts |
+| `3` | Drains | Active drain progress with elapsed time |
+| `4` | Blockers | PDBs preventing evictions |
+| `5` | Events | Upgrade-relevant events with filters |
+
+<!-- SCREENSHOT: nodes screen showing table with stages and versions (docs/images/nodes.png) -->
+
+### Navigation
 
 | Key | Action |
 |-----|--------|
-| `d` | Drill into node/drain details |
-| `b` | Blockers panel |
-| `e` | Full event log |
-| `↑/↓` or `j/k` | Navigate list |
-| `←/→` or `h/l` | Switch stage (pipeline view) |
-| `Enter` | Show details for selected item |
-| `?` | Help |
+| `↑/↓` or `j/k` | Navigate lists |
+| `Enter` | Show details |
+| `?` | Help overlay |
 | `q` | Back / Quit |
+| `/` | Fuzzy search pods (Enter commit, Esc clear) |
+| `a` | Cycle pod filter (disrupting/rescheduled/all) |
+| `u/w/a` | Event filter (upgrade/warnings/all) |
 
 ---
 
-## CLI Options
+## What it tracks
 
-```bash
-# Watch specific cluster
-kupgrade watch --context production-cluster
-
-# Watch specific namespace only
-kupgrade watch -n my-namespace
-
-# Override target version detection
-kupgrade watch --target-version v1.29.0
-
-# Pre-flight check before upgrading
-kupgrade check --target-version v1.32
-
-# Run pre-flight, then watch
-kupgrade watch --check-first
-```
-
-All standard kubectl flags are supported (`--context`, `--namespace`, `--kubeconfig`, etc).
+| Resource | What |
+|----------|------|
+| Nodes | Stage transitions (Ready → Cordoned → Draining → Upgrading → Complete), version changes |
+| Pods | Evictions, migrations across nodes, restarts, probe failures |
+| PDBs | Disruption budgets blocking drains |
+| Events | Filtered to upgrade-relevant activity |
 
 ---
 
-## What kupgrade Tracks
+## What this isn't
 
-| Resource | What's Watched |
-|----------|----------------|
-| **Nodes** | Stage transitions, version changes, conditions, taints |
-| **Pods** | Evictions, migrations, health probes, restarts |
-| **PDBs** | Disruption budgets blocking evictions |
-| **Events** | Upgrade-relevant events (filtered from noise) |
+- **Not a cluster browser** — use k9s for that. kupgrade only shows what matters during an upgrade.
+- **Not an upgrade orchestrator** — your platform handles that (AKS, EKS, GKE, kOps). kupgrade just watches.
+- **Not a deprecation scanner** — kupgrade focuses on the live upgrade. For API deprecation scanning before you upgrade, use [pluto](https://github.com/FairwindsOps/pluto), [kubepug](https://github.com/kubepug/kubepug), or [kubent](https://github.com/doitintl/kube-no-trouble).
 
 ---
 
-## What This Isn't
+## Platform support
 
-- **Not a pre-upgrade compatibility scanner** — For API deprecation scanning without upgrade context, use [Pluto](https://github.com/FairwindsOps/pluto) or [kubent](https://github.com/doitintl/kube-no-trouble). kupgrade's `check` command focuses on upgrade-specific readiness.
-- **Not an upgrade orchestrator** — Use your platform's tooling (kOps, EKS, GKE, AKS). kupgrade observes, it doesn't execute.
-- **Not a replacement for k9s** — k9s is excellent for general cluster management. kupgrade complements it during the specific window of an upgrade.
+kupgrade started as an AKS upgrade observer and runs in AKS production today. We're actively working on GKE and EKS support.
 
----
+| Platform | Status | Stage Pipeline | Notes |
+|----------|--------|---------------|-------|
+| **AKS** | Fully supported | 5 stages (Ready → Cordoned → Draining → Upgrading → Complete) | AKS reimages nodes in place — you see the full lifecycle |
+| **GKE** | Works, validating | 4 stages (Upgrading stage N/A) | GKE replaces nodes — no Upgrading stage |
+| **EKS** | Works, validating | 4 stages (Upgrading stage N/A) | EKS replaces nodes — no Upgrading stage |
+| **Other** | Untested | 4 stages | Should work on any platform with rolling node upgrades |
 
-## Roadmap
+**Why the difference?** Each platform handles node upgrades differently. AKS reimages your existing nodes — the node name stays the same, the kubelet restarts with the new version, and the node comes back. You can follow a single node through the entire upgrade. GKE and EKS take a different approach: they delete old nodes and create new ones with different names. You'll see old nodes disappear and new ones show up at the target version.
 
-- [x] Real-time upgrade observer (`kupgrade watch`)
-- [x] PDB blocker detection with details
-- [x] Pod migration tracking
-- [x] Drain progress with elapsed time
-- [ ] Pre-flight checks (`kupgrade check`) — API deprecations, PDB readiness, webhook health
-- [ ] **Pre-upgrade pod state snapshot** (`kupgrade check --snapshot`)
-- [ ] **Post-upgrade diff report** (`kupgrade report --compare`) — See what broke vs. what was already broken
-- [ ] Drain velocity and ETA calculation
-- [ ] Blocker remediation suggestions
-- [ ] SARIF output for CI/CD integration
+Everything else — PDB blockers, pod migrations, snapshot/report, pre-flight checks — works the same on every platform.
+
+### Tested versions
+
+| Platform | Versions |
+|----------|----------|
+| AKS | 1.28 – 1.33 |
+
+If you try it on another platform, open an issue and tell us how it went.
+
+## Under the hood
+
+`kupgrade` uses:
+
+- [bubbletea](https://github.com/charmbracelet/bubbletea), [lipgloss](https://github.com/charmbracelet/lipgloss), and [bubbles](https://github.com/charmbracelet/bubbles) for the terminal UI
+- [cobra](https://github.com/spf13/cobra) and [cli-runtime](https://github.com/kubernetes/cli-runtime) for kubectl-compatible CLI flags
+- [client-go](https://github.com/kubernetes/client-go) informers for efficient real-time watching (no polling)
+- [kubectl](https://github.com/kubernetes/kubectl) describe SDK for the detail overlay
+- [fuzzy](https://github.com/sahilm/fuzzy) for pod search
 
 ---
 
 ## Requirements
 
-- Go 1.22+ (for installation)
 - kubectl access to your cluster
-- Read permissions for nodes, pods, events, poddisruptionbudgets
-
----
-
-## Architecture
-
-For developers and contributors:
-
-- **[Architecture Reference](docs/ARCHITECTURE.md)** — Complete codebase documentation, data flow, interfaces, and design decisions
-
-This project follows the [Google Go Style Guide](https://google.github.io/styleguide/go/).
+- Read permissions: nodes, pods, events, poddisruptionbudgets
 
 ---
 
 ## Contributing
 
-Contributions welcome! Please open an issue first to discuss what you'd like to change.
+Contributions welcome — open an issue first so we can talk about it.
 
 ```bash
 git clone https://github.com/sabirmohamed/kupgrade
@@ -201,6 +209,12 @@ cd kupgrade
 go build -o kupgrade ./cmd/kupgrade
 ./kupgrade watch --context my-cluster
 ```
+
+---
+
+## Development
+
+Built with assitance of [Claude Opus 4.5](https://claude.ai) using the [BMAD Method](https://github.com/bmadcode/BMAD-METHOD), followwing [Google's Go Style Guide](https://google.github.io/styleguide/go) and https://go.dev/doc/effective_go.
 
 ---
 
