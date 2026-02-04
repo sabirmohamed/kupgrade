@@ -105,6 +105,12 @@ var (
 				BorderForeground(colorWarning).
 				PaddingLeft(1)
 
+	// Red left border for active blockers
+	activeBlockerPanelStyle = lipgloss.NewStyle().
+				Border(lipgloss.Border{Left: "│"}).
+				BorderForeground(colorError).
+				PaddingLeft(1)
+
 	panelTitleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorText)

@@ -50,48 +50,79 @@ func (m Model) renderOverview() string {
 	return content
 }
 
-// renderBlockersSection shows blockers with left border accent
+// renderBlockersSection shows blockers with left border accent.
+// Active blockers (red) are shown first, then risks (yellow).
 func (m Model) renderBlockersSection() string {
 	if len(m.blockers) == 0 {
 		return ""
 	}
 
+	activeBlockers, riskBlockers := m.splitBlockersByTier()
+
 	var lines []string
-	title := warningStyle.Render(fmt.Sprintf("⚠ BLOCKERS (%d)", len(m.blockers)))
-	lines = append(lines, title)
 
-	for _, blocker := range m.blockers {
-		name := blocker.Name
-		if blocker.Namespace != "" {
-			name = blocker.Namespace + "/" + blocker.Name
+	// Active blockers: red, with node name and duration
+	if len(activeBlockers) > 0 {
+		title := errorStyle.Render(fmt.Sprintf("%s ACTIVE BLOCKERS (%d)", errorIcon, len(activeBlockers)))
+		lines = append(lines, title)
+
+		for _, blocker := range activeBlockers {
+			lines = append(lines, m.formatOverviewBlockerLine(blocker, true))
 		}
+	}
 
-		nameStr := fmt.Sprintf("%s %s", blocker.Type, warningStyle.Render(name))
+	// Risk blockers: yellow, informational
+	if len(riskBlockers) > 0 {
+		title := warningStyle.Render(fmt.Sprintf("%s PDB RISKS (%d)", warningIcon, len(riskBlockers)))
+		lines = append(lines, title)
 
-		// Show which node is blocked
-		nodeStr := ""
-		if blocker.NodeName != "" {
-			nodeStr = fmt.Sprintf(" blocking %s", blocker.NodeName)
+		for _, blocker := range riskBlockers {
+			lines = append(lines, m.formatOverviewBlockerLine(blocker, false))
 		}
-
-		// Show duration
-		durationStr := ""
-		if !blocker.StartTime.IsZero() {
-			duration := m.currentTime.Sub(blocker.StartTime)
-			durationStr = fmt.Sprintf(" (%s)", formatDuration(duration))
-		}
-
-		constraint := blocker.Detail
-		if constraint == "" {
-			constraint = "eviction blocked"
-		}
-
-		line := fmt.Sprintf("%s    %s%s%s", nameStr, footerDescStyle.Render(constraint), nodeStr, errorStyle.Render(durationStr))
-		lines = append(lines, line)
 	}
 
 	content := strings.Join(lines, "\n")
+
+	// Use red border for active blockers, yellow for risks only
+	if len(activeBlockers) > 0 {
+		return activeBlockerPanelStyle.Render(content)
+	}
 	return blockerPanelStyle.Render(content)
+}
+
+// formatOverviewBlockerLine formats a single blocker line for the overview section.
+func (m Model) formatOverviewBlockerLine(blocker types.Blocker, isActive bool) string {
+	name := blocker.Name
+	if blocker.Namespace != "" {
+		name = blocker.Namespace + "/" + blocker.Name
+	}
+
+	var nameStyle func(strs ...string) string
+	if isActive {
+		nameStyle = errorStyle.Render
+	} else {
+		nameStyle = warningStyle.Render
+	}
+
+	nameStr := fmt.Sprintf("%s %s", blocker.Type, nameStyle(name))
+
+	nodeStr := ""
+	if blocker.NodeName != "" {
+		nodeStr = fmt.Sprintf(" blocking %s", blocker.NodeName)
+	}
+
+	durationStr := ""
+	if !blocker.StartTime.IsZero() {
+		duration := m.currentTime.Sub(blocker.StartTime)
+		durationStr = fmt.Sprintf(" (%s)", formatDuration(duration))
+	}
+
+	constraint := blocker.Detail
+	if constraint == "" {
+		constraint = "disruption budget exhausted"
+	}
+
+	return fmt.Sprintf("%s    %s%s%s", nameStr, footerDescStyle.Render(constraint), nodeStr, errorStyle.Render(durationStr))
 }
 
 // renderDrainProgressSection shows drain progress for actively draining nodes
@@ -169,7 +200,16 @@ func (m Model) renderNodeList() string {
 	// Calculate visible height for node list
 	blockerLines := 0
 	if len(m.blockers) > 0 {
-		blockerLines = len(m.blockers) + 3
+		activeBlockers, riskBlockers := m.splitBlockersByTier()
+		// Each blocker takes 2 lines (name + detail), plus section headers
+		blockerLines = len(m.blockers) * 2
+		if len(activeBlockers) > 0 {
+			blockerLines++ // "ACTIVE BLOCKERS" header
+		}
+		if len(riskBlockers) > 0 {
+			blockerLines++ // "PDB RISKS" header
+		}
+		blockerLines += 2 // panel border padding
 	}
 	eventsLines := len(m.events)
 	if eventsLines > 8 {

@@ -7,9 +7,6 @@ import (
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 	corev1 "k8s.io/api/core/v1"
-	policyv1 "k8s.io/api/policy/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 )
@@ -23,7 +20,6 @@ const (
 
 // Compile-time interface checks
 var _ EventEmitter = (*Manager)(nil)
-var _ BlockerDetector = (*Manager)(nil)
 
 // Manager coordinates all watchers and emits events
 type Manager struct {
@@ -42,6 +38,7 @@ type Manager struct {
 	pdbWatcher   *PDBWatcher
 	migrations   MigrationTracker
 	stages       StageComputer
+	pdbMu        sync.Mutex // Guards CheckPDBBlockers against concurrent informer callbacks
 }
 
 // NewManager creates a new watcher manager
@@ -71,8 +68,9 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 	m.eventWatcher = NewEventWatcher(factory, namespace, m)
 	m.pdbWatcher = NewPDBWatcher(factory, namespace, m)
 
-	// Wire up blocker detection (event watcher needs access to pod and PDB data)
-	m.eventWatcher.SetBlockerDetector(m)
+	// Wire PDB and node stage changes to trigger blocker re-evaluation
+	m.pdbWatcher.SetOnChange(m.CheckPDBBlockers)
+	m.nodeWatcher.onStageChangeFunc = m.CheckPDBBlockers
 
 	return m
 }
@@ -146,7 +144,7 @@ func (m *Manager) Emit(event types.Event) {
 	}
 }
 
-// EmitNodeState sends a node state update (ring buffer semantics)
+// EmitNodeState sends a node state update (ring buffer semantics).
 func (m *Manager) EmitNodeState(state types.NodeState) {
 	select {
 	case m.nodeStateCh <- state:
@@ -227,7 +225,61 @@ func (m *Manager) InitialPodStates() []types.PodState {
 
 // InitialBlockers returns current blockers (for initial TUI load)
 func (m *Manager) InitialBlockers() []types.Blocker {
-	return m.pdbWatcher.buildBlockers()
+	return m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods())
+}
+
+// CheckPDBBlockers evaluates all PDBs against current cluster state and emits
+// blocker updates. Sends a full replacement set: first clears all PDB blockers,
+// then emits the current set. Called on node stage changes and PDB status updates.
+// Serialized with pdbMu since informer callbacks run on separate goroutines.
+func (m *Manager) CheckPDBBlockers() {
+	m.pdbMu.Lock()
+	defer m.pdbMu.Unlock()
+
+	blockers := m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods())
+
+	// Signal TUI to replace all PDB blockers with the fresh set
+	m.EmitBlocker(types.Blocker{
+		Type:    types.BlockerPDB,
+		Cleared: true,
+	})
+	for _, blocker := range blockers {
+		m.EmitBlocker(blocker)
+	}
+}
+
+// nodesBlockableByPDB returns names of all nodes in DRAINING or CORDONED stage.
+// ComputeStage returns CORDONED for unschedulable nodes; the CORDONED→DRAINING
+// correction based on evictable pod counts only happens in NodeWatcher.buildState.
+// For PDB blocker evaluation, both stages are relevant: a cordoned node is about
+// to be drained (or already is), so PDBs matching pods on it are active blockers.
+func (m *Manager) nodesBlockableByPDB() []string {
+	var nodes []string
+	for _, obj := range m.nodeWatcher.informer.GetStore().List() {
+		node, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		stage := m.stages.ComputeStage(node)
+		if stage == types.StageDraining || stage == types.StageCordoned {
+			nodes = append(nodes, node.Name)
+		}
+	}
+	return nodes
+}
+
+// allPods returns all pods from the informer cache.
+func (m *Manager) allPods() []*corev1.Pod {
+	objects := m.podWatcher.informer.GetStore().List()
+	pods := make([]*corev1.Pod, 0, len(objects))
+	for _, obj := range objects {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			continue
+		}
+		pods = append(pods, pod)
+	}
+	return pods
 }
 
 // countPodsOnNode counts all pods on a node (for display in overview/nodes).
@@ -274,66 +326,4 @@ func isDaemonSetPod(pod *corev1.Pod) bool {
 // WaitForCacheSync waits for all caches to sync
 func WaitForCacheSync(ctx context.Context, syncFuncs ...cache.InformerSynced) bool {
 	return cache.WaitForCacheSync(ctx.Done(), syncFuncs...)
-}
-
-// BlockerDetector implementation
-
-// GetPodNode returns the node name for a pod, empty if not found.
-func (m *Manager) GetPodNode(namespace, name string) string {
-	key := namespace + "/" + name
-	obj, exists, err := m.podWatcher.informer.GetStore().GetByKey(key)
-	if err != nil || !exists {
-		return ""
-	}
-	pod := obj.(*corev1.Pod)
-	return pod.Spec.NodeName
-}
-
-// GetPod returns the pod object, nil if not found.
-func (m *Manager) GetPod(namespace, name string) *corev1.Pod {
-	key := namespace + "/" + name
-	obj, exists, err := m.podWatcher.informer.GetStore().GetByKey(key)
-	if err != nil || !exists {
-		return nil
-	}
-	return obj.(*corev1.Pod)
-}
-
-// FindBlockingPDB finds a PDB that matches the given pod and has 0 disruption budget.
-// Returns namespace, name, detail. Empty strings if no blocking PDB found.
-func (m *Manager) FindBlockingPDB(pod *corev1.Pod) (namespace, name, detail string) {
-	if pod == nil {
-		return "", "", ""
-	}
-
-	podLabels := labels.Set(pod.Labels)
-
-	// Iterate through all PDBs to find one that matches this pod
-	for _, obj := range m.pdbWatcher.informer.GetStore().List() {
-		pdb := obj.(*policyv1.PodDisruptionBudget)
-
-		// PDB must be in same namespace as pod
-		if pdb.Namespace != pod.Namespace {
-			continue
-		}
-
-		// Check if PDB is blocking (0 disruptions allowed)
-		if pdb.Status.DisruptionsAllowed > 0 {
-			continue
-		}
-
-		// Check if PDB selector matches pod
-		selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
-		if err != nil {
-			continue
-		}
-
-		if selector.Matches(podLabels) {
-			// Found a blocking PDB that matches this pod
-			detail := m.pdbWatcher.GetPDBDetail(pdb.Namespace, pdb.Name)
-			return pdb.Namespace, pdb.Name, detail
-		}
-	}
-
-	return "", "", ""
 }

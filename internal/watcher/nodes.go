@@ -20,6 +20,7 @@ type NodeWatcher struct {
 	evictablePodCounter   func(nodeName string) int // Non-DaemonSet pods (for drain progress)
 	drainStartTimes       map[string]time.Time      // Track when each node started draining
 	initialEvictableCount map[string]int            // Evictable pod count when drain started
+	onStageChangeFunc     func()                    // Called when any node's stage changes
 }
 
 // NewNodeWatcher creates a new node watcher
@@ -64,7 +65,13 @@ func (w *NodeWatcher) onAdd(obj interface{}) {
 	})
 
 	// Emit computed state for TUI
-	w.emitter.EmitNodeState(w.buildState(node))
+	state := w.buildState(node)
+	w.emitter.EmitNodeState(state)
+
+	// If the new node is cordoned or draining, re-evaluate PDB blockers
+	if (state.Stage == types.StageDraining || state.Stage == types.StageCordoned) && w.onStageChangeFunc != nil {
+		w.onStageChangeFunc()
+	}
 }
 
 func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
@@ -77,8 +84,17 @@ func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 	// Emit events for significant changes (for events panel)
 	w.emitChangeEvents(oldNode, newNode)
 
+	// Check if stage changed (for PDB blocker re-evaluation)
+	oldStage := w.stages.ComputeStage(oldNode)
+	newState := w.buildState(newNode)
+
 	// Always emit current state (TUI will update)
-	w.emitter.EmitNodeState(w.buildState(newNode))
+	w.emitter.EmitNodeState(newState)
+
+	// Re-evaluate PDB blockers when draining set changes
+	if oldStage != newState.Stage && w.onStageChangeFunc != nil {
+		w.onStageChangeFunc()
+	}
 }
 
 func (w *NodeWatcher) emitChangeEvents(oldNode, newNode *corev1.Node) {
@@ -162,6 +178,11 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 		Name:    node.Name,
 		Deleted: true,
 	})
+
+	// Re-evaluate PDB blockers since draining set may have changed
+	if w.onStageChangeFunc != nil {
+		w.onStageChangeFunc()
+	}
 
 	// Recompute versions from remaining nodes
 	var versions []string

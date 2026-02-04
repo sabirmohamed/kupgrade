@@ -10,8 +10,21 @@ const (
 	BlockerDaemonSet BlockerType = "DaemonSet"
 )
 
+// BlockerTier distinguishes informational PDB risks from active drain blockers.
+type BlockerTier int
+
+const (
+	// BlockerTierRisk indicates a PDB with DisruptionsAllowed == 0 but no matched
+	// pods on a draining node. Informational warning (yellow).
+	BlockerTierRisk BlockerTier = iota
+	// BlockerTierActive indicates a PDB actively blocking a drain — its selector
+	// matches pods on a node in DRAINING stage. Urgent (red).
+	BlockerTierActive
+)
+
 type Blocker struct {
 	Type      BlockerType
+	Tier      BlockerTier // Risk (informational) vs Active (blocking a drain)
 	Name      string
 	Namespace string // PDB namespace
 	Detail    string

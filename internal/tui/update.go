@@ -515,7 +515,10 @@ func (m *Model) handlePodUpdate(pod types.PodState) {
 
 // handleBlockerUpdate adds or removes blockers.
 // Blocker key includes NodeName for per-node tracking (same PDB can block multiple nodes).
-// If Cleared blocker has empty NodeName, removes all blockers for that PDB (e.g., PDB deleted).
+// Clearing behavior:
+//   - Cleared + empty Name + empty NodeName: clear all blockers of that Type (full refresh)
+//   - Cleared + Name + empty NodeName: clear all blockers for that PDB (PDB deleted)
+//   - Cleared + Name + NodeName: clear specific node's blocker
 func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
 	// Build key function - includes NodeName for per-node tracking
 	makeKey := func(b types.Blocker) string {
@@ -525,7 +528,16 @@ func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
 	blockerKey := makeKey(blocker)
 
 	if blocker.Cleared {
-		if blocker.NodeName == "" {
+		if blocker.Name == "" && blocker.NodeName == "" {
+			// Clear all blockers of this type (full replacement signal)
+			filtered := m.blockers[:0]
+			for _, b := range m.blockers {
+				if b.Type != blocker.Type {
+					filtered = append(filtered, b)
+				}
+			}
+			m.blockers = filtered
+		} else if blocker.NodeName == "" {
 			// Clear all blockers for this PDB (PDB was deleted)
 			baseKey := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name + "/"
 			filtered := m.blockers[:0]

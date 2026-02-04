@@ -76,17 +76,3 @@ type MigrationTracker interface {
 	// SHOULD be called periodically (e.g., every 30s).
 	Cleanup(maxAge time.Duration)
 }
-
-// BlockerDetector helps detect PDB blockers from events by correlating
-// with pod and PDB information.
-type BlockerDetector interface {
-	// GetPodNode returns the node name for a pod, empty if not found.
-	GetPodNode(namespace, name string) string
-
-	// FindBlockingPDB finds a PDB that matches the given pod and has 0 disruption budget.
-	// Returns namespace, name, detail. Empty strings if no blocking PDB found.
-	FindBlockingPDB(pod *corev1.Pod) (namespace, name, detail string)
-
-	// GetPod returns the pod object, nil if not found.
-	GetPod(namespace, name string) *corev1.Pod
-}
