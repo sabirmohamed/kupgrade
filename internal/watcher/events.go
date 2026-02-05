@@ -3,12 +3,19 @@ package watcher
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
+)
+
+// Surge event message patterns
+var (
+	surgeCreatedPattern  = regexp.MustCompile(`^Created a surge node (\S+) for agentpool (\S+)$`)
+	surgeRemovingPattern = regexp.MustCompile(`^Removing surge node: (\S+)$`)
 )
 
 // upgradeRelevantReasons filters K8s Events to upgrade-relevant ones.
@@ -22,6 +29,12 @@ var upgradeRelevantReasons = map[string]bool{
 	"NodeNotSchedulable":      true,
 	"Rebooted":                true,
 	"NodeAllocatableEnforced": true,
+
+	// AKS upgrade events
+	"Upgrade":        true, // "Deleting node X from API server", "Successfully reimaged/upgraded node: X"
+	"RemovingNode":   true, // "Removing Node X from Controller"
+	"RegisteredNode": true, // "Registered Node X in Controller"
+	"Surge":          true, // "Created a surge node X for agentpool Y", "Removing surge node: X"
 
 	// Drain operations (node-level)
 	"Drain":       true,
@@ -55,11 +68,15 @@ var upgradeRelevantReasons = map[string]bool{
 	"ImageGCFailed":       true,
 }
 
+// SurgeCallback is called when a surge event is detected
+type SurgeCallback func(nodeName, poolName string, created bool)
+
 // EventWatcher watches Kubernetes events for upgrade-relevant occurrences
 type EventWatcher struct {
-	informer  cache.SharedIndexInformer
-	emitter   EventEmitter
-	namespace string
+	informer      cache.SharedIndexInformer
+	emitter       EventEmitter
+	namespace     string
+	surgeCallback SurgeCallback
 }
 
 // NewEventWatcher creates a new event watcher
@@ -133,4 +150,13 @@ func (w *EventWatcher) onAdd(obj interface{}) {
 		Namespace: event.Namespace,
 		Reason:    event.Reason,
 	})
+
+	// Parse surge events and notify callback
+	if event.Reason == "Surge" && w.surgeCallback != nil {
+		if matches := surgeCreatedPattern.FindStringSubmatch(event.Message); len(matches) >= 3 {
+			w.surgeCallback(matches[1], matches[2], true)
+		} else if matches := surgeRemovingPattern.FindStringSubmatch(event.Message); len(matches) >= 2 {
+			w.surgeCallback(matches[1], "", false)
+		}
+	}
 }

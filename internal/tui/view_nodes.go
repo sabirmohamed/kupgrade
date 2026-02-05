@@ -26,53 +26,100 @@ func (m Model) renderNodesScreen() string {
 	return m.placeContent(b.String())
 }
 
+// buildNodeRow builds a single row for the nodes table
+func (m Model) buildNodeRow(name string) []string {
+	node := m.nodes[name]
+
+	conditions := "Ready"
+	if !node.Ready {
+		conditions = "NotReady"
+	} else if len(node.Conditions) > 0 {
+		conditions = strings.Join(node.Conditions, ",")
+	}
+
+	taints := "-"
+	if len(node.Taints) > 0 {
+		taints = strings.Join(node.Taints, ",")
+	} else if !node.Schedulable {
+		taints = "NoSchedule"
+	}
+
+	age := node.Age
+	if age == "" {
+		age = "-"
+	}
+
+	stageStr := string(node.Stage)
+	if node.SurgeNode {
+		stageStr += " SURGE"
+	}
+
+	return []string{name, node.Version, stageStr, age, conditions, taints}
+}
+
+// nodeTableStyleFunc returns the style function for the nodes table
+func (m Model) nodeTableStyleFunc(nodes []string) func(row, col int) lipgloss.Style {
+	return func(row, col int) lipgloss.Style {
+		style := lipgloss.NewStyle().Padding(0, 1)
+
+		// Header row
+		if row == table.HeaderRow {
+			style = style.Foreground(colorTextMuted).Bold(true)
+			if col == 3 { // AGE
+				style = style.Align(lipgloss.Right)
+			}
+			return style
+		}
+
+		// Alternating row backgrounds
+		if row%2 == 0 {
+			style = style.Background(colorBg)
+		} else {
+			style = style.Background(colorBgAlt)
+		}
+
+		// Selected row highlight
+		if row == m.listIndex {
+			style = style.Background(colorSelected).Foreground(colorTextBold)
+		}
+
+		// Right-align AGE column
+		if col == 3 {
+			style = style.Align(lipgloss.Right)
+		}
+
+		if row >= len(nodes) {
+			return style
+		}
+
+		// Color STAGE column
+		if col == 2 {
+			if sc, ok := stageColors[string(m.nodes[nodes[row]].Stage)]; ok {
+				style = style.Foreground(sc)
+			}
+		}
+
+		// Color CONDITIONS column
+		if col == 4 && !m.nodes[nodes[row]].Ready {
+			style = style.Foreground(colorError)
+		}
+
+		return style
+	}
+}
+
 // renderNodesTable renders the nodes table using lipgloss/table with per-cell coloring
 func (m Model) renderNodesTable() string {
 	nodes := m.sortedNodeNames()
 
 	rows := make([][]string, len(nodes))
 	for i, name := range nodes {
-		node := m.nodes[name]
-
-		conditions := "Ready"
-		if !node.Ready {
-			conditions = "NotReady"
-		} else if len(node.Conditions) > 0 {
-			conditions = strings.Join(node.Conditions, ",")
-		}
-
-		taints := "-"
-		if len(node.Taints) > 0 {
-			taints = strings.Join(node.Taints, ",")
-		} else if !node.Schedulable {
-			taints = "NoSchedule"
-		}
-
-		age := node.Age
-		if age == "" {
-			age = "-"
-		}
-
-		rows[i] = []string{
-			name,
-			node.Version,
-			string(node.Stage),
-			age,
-			conditions,
-			taints,
-		}
+		rows[i] = m.buildNodeRow(name)
 	}
 
-	visibleRows := m.height - 10
-	if visibleRows < 5 {
-		visibleRows = 5
-	}
+	visibleRows := max(m.height-10, 5)
 	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(nodes))
-
-	tableWidth := m.mainWidth() - 2
-	if tableWidth < 80 {
-		tableWidth = 80
-	}
+	tableWidth := max(m.mainWidth()-2, 80)
 
 	t := table.New().
 		Headers("NAME", "VERSION", "STAGE", "AGE", "CONDITIONS", "TAINTS").
@@ -89,64 +136,13 @@ func (m Model) renderNodesTable() string {
 		BorderRight(false).
 		BorderHeader(true).
 		BorderStyle(tableBorderStyle).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			style := lipgloss.NewStyle().Padding(0, 1)
-			if row == table.HeaderRow {
-				style = style.Foreground(colorTextMuted).Bold(true)
-				if col == 3 { // AGE
-					style = style.Align(lipgloss.Right)
-				}
-				return style
-			}
-
-			actualIdx := row
-
-			// Alternating row backgrounds
-			if actualIdx%2 == 0 {
-				style = style.Background(colorBg)
-			} else {
-				style = style.Background(colorBgAlt)
-			}
-
-			// Selected row highlight
-			if actualIdx == m.listIndex {
-				style = style.Background(colorSelected).Foreground(colorTextBold)
-			}
-
-			// Right-align AGE column
-			if col == 3 {
-				style = style.Align(lipgloss.Right)
-			}
-
-			if actualIdx >= len(nodes) {
-				return style
-			}
-
-			// Color STAGE column
-			if col == 2 {
-				node := m.nodes[nodes[actualIdx]]
-				if sc, ok := stageColors[string(node.Stage)]; ok {
-					style = style.Foreground(sc)
-				}
-			}
-
-			// Color CONDITIONS column
-			if col == 4 {
-				node := m.nodes[nodes[actualIdx]]
-				if !node.Ready {
-					style = style.Foreground(colorError)
-				}
-			}
-
-			return style
-		})
+		StyleFunc(m.nodeTableStyleFunc(nodes))
 
 	rendered := t.String()
 
 	// Show scroll indicator and hint
 	if len(nodes) > visibleRows {
-		pos := fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(nodes))
-		rendered += "\n" + footerDescStyle.Render(pos)
+		rendered += "\n" + footerDescStyle.Render(fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(nodes)))
 	} else if len(nodes) > 0 {
 		rendered += "\n" + footerDescStyle.Render(" d describe")
 	}

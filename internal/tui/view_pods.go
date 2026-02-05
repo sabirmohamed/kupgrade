@@ -17,7 +17,7 @@ func (m Model) renderPodsScreen() string {
 
 	upgradeActive := len(m.nodesByStage[types.StageCordoned])+
 		len(m.nodesByStage[types.StageDraining])+
-		len(m.nodesByStage[types.StageUpgrading]) > 0
+		len(m.nodesByStage[types.StageReimaging]) > 0
 
 	stageFiltered := m.getFilteredPodList()
 	totalFiltered := len(stageFiltered)

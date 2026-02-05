@@ -3,6 +3,7 @@ package watcher
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
@@ -16,11 +17,14 @@ type NodeWatcher struct {
 	informer              cache.SharedIndexInformer
 	emitter               EventEmitter
 	stages                StageComputer
-	podCounter            func(nodeName string) int // Total pods (for display)
-	evictablePodCounter   func(nodeName string) int // Non-DaemonSet pods (for drain progress)
-	drainStartTimes       map[string]time.Time      // Track when each node started draining
-	initialEvictableCount map[string]int            // Evictable pod count when drain started
-	onStageChangeFunc     func()                    // Called when any node's stage changes
+	podCounter            func(nodeName string) int  // Total pods (for display)
+	evictablePodCounter   func(nodeName string) int  // Non-DaemonSet pods (for drain progress)
+	drainStartTimes       map[string]time.Time       // Track when each node started draining
+	initialEvictableCount map[string]int             // Evictable pod count when drain started
+	onStageChangeFunc     func()                     // Called when any node's stage changes
+	surgeMu               sync.RWMutex               // Guards reimagingNodes and surgeNodes
+	reimagingNodes        map[string]types.NodeState // Ghost nodes retained during reimage
+	surgeNodes            map[string]bool            // Surge node names (from AKS Surge events)
 }
 
 // NewNodeWatcher creates a new node watcher
@@ -33,6 +37,8 @@ func NewNodeWatcher(factory informers.SharedInformerFactory, emitter EventEmitte
 		evictablePodCounter:   evictablePodCounter,
 		drainStartTimes:       make(map[string]time.Time),
 		initialEvictableCount: make(map[string]int),
+		reimagingNodes:        make(map[string]types.NodeState),
+		surgeNodes:            make(map[string]bool),
 	}
 }
 
@@ -50,10 +56,49 @@ func (w *NodeWatcher) Start(ctx context.Context) error {
 }
 
 func (w *NodeWatcher) onAdd(obj interface{}) {
-	node := obj.(*corev1.Node)
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		return
+	}
 
 	// Update target if this node has higher version
 	w.stages.SetTargetVersion(node.Status.NodeInfo.KubeletVersion)
+
+	// Check if this node is returning from reimaging
+	w.surgeMu.Lock()
+	ghostState, wasReimaging := w.reimagingNodes[node.Name]
+	if wasReimaging {
+		delete(w.reimagingNodes, node.Name)
+	}
+	isSurge := w.surgeNodes[node.Name]
+	w.surgeMu.Unlock()
+
+	if wasReimaging {
+		targetVersion := w.stages.TargetVersion()
+		nodeVersion := node.Status.NodeInfo.KubeletVersion
+
+		if nodeVersion == targetVersion {
+			// Reimaged to target version — mark COMPLETE
+			state := w.buildState(node)
+			state.Stage = types.StageComplete
+			w.emitter.EmitNodeState(state)
+
+			w.emitter.Emit(types.Event{
+				Type:      types.EventNodeReady,
+				Severity:  types.SeverityInfo,
+				Timestamp: time.Now(),
+				Message:   fmt.Sprintf("Node %s reimaged (%s → %s)", node.Name, ghostState.Version, nodeVersion),
+				NodeName:  node.Name,
+			})
+
+			if w.onStageChangeFunc != nil {
+				w.onStageChangeFunc()
+			}
+			return
+		}
+
+		// Came back at old version — recompute stage normally
+	}
 
 	// Emit event for events panel
 	w.emitter.Emit(types.Event{
@@ -66,6 +111,12 @@ func (w *NodeWatcher) onAdd(obj interface{}) {
 
 	// Emit computed state for TUI
 	state := w.buildState(node)
+
+	// Mark as surge node if tracked
+	if isSurge {
+		state.SurgeNode = true
+	}
+
 	w.emitter.EmitNodeState(state)
 
 	// If the new node is cordoned or draining, re-evaluate PDB blockers
@@ -75,8 +126,14 @@ func (w *NodeWatcher) onAdd(obj interface{}) {
 }
 
 func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
-	oldNode := oldObj.(*corev1.Node)
-	newNode := newObj.(*corev1.Node)
+	oldNode, ok := oldObj.(*corev1.Node)
+	if !ok {
+		return
+	}
+	newNode, ok := newObj.(*corev1.Node)
+	if !ok {
+		return
+	}
 
 	// Update target if this node has higher version
 	w.stages.SetTargetVersion(newNode.Status.NodeInfo.KubeletVersion)
@@ -87,6 +144,14 @@ func (w *NodeWatcher) onUpdate(oldObj, newObj interface{}) {
 	// Check if stage changed (for PDB blocker re-evaluation)
 	oldStage := w.stages.ComputeStage(oldNode)
 	newState := w.buildState(newNode)
+
+	// Mark as surge node if tracked
+	w.surgeMu.RLock()
+	isSurge := w.surgeNodes[newNode.Name]
+	w.surgeMu.RUnlock()
+	if isSurge {
+		newState.SurgeNode = true
+	}
 
 	// Always emit current state (TUI will update)
 	w.emitter.EmitNodeState(newState)
@@ -165,26 +230,59 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 		}
 	}
 
-	w.emitter.Emit(types.Event{
-		Type:      types.EventK8sWarning,
-		Severity:  types.SeverityWarning,
-		Timestamp: time.Now(),
-		Message:   fmt.Sprintf("Node %s deleted", node.Name),
-		NodeName:  node.Name,
-	})
+	// Check if this is a surge node before cleaning up tracking
+	w.surgeMu.Lock()
+	wasSurge := w.surgeNodes[node.Name]
+	delete(w.surgeNodes, node.Name)
+	w.surgeMu.Unlock()
 
-	// Emit empty state to signal deletion
-	w.emitter.EmitNodeState(types.NodeState{
-		Name:    node.Name,
-		Deleted: true,
-	})
+	// Surge node deletion is expected — emit as info, not warning
+	if wasSurge {
+		w.emitter.Emit(types.Event{
+			Type:      types.EventK8sNormal,
+			Severity:  types.SeverityInfo,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("Surge node %s deleted", node.Name),
+			NodeName:  node.Name,
+		})
+	} else {
+		w.emitter.Emit(types.Event{
+			Type:      types.EventK8sWarning,
+			Severity:  types.SeverityWarning,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("Node %s deleted", node.Name),
+			NodeName:  node.Name,
+		})
+	}
+
+	// If an upgrade is active AND this is NOT a surge node, retain as REIMAGING (ghost node).
+	// Surge nodes are temporary — they don't reimage, they just get removed.
+	if w.isUpgradeActive() && !wasSurge {
+		ghostState := w.buildState(node)
+		ghostState.Stage = types.StageReimaging
+		ghostState.Deleted = false
+		w.surgeMu.Lock()
+		w.reimagingNodes[node.Name] = ghostState
+		w.surgeMu.Unlock()
+		w.emitter.EmitNodeState(ghostState)
+	} else {
+		// No upgrade active or surge node — normal deletion
+		w.emitter.EmitNodeState(types.NodeState{
+			Name:    node.Name,
+			Deleted: true,
+		})
+	}
+
+	// Clean up drain tracking
+	delete(w.drainStartTimes, node.Name)
+	delete(w.initialEvictableCount, node.Name)
 
 	// Re-evaluate PDB blockers since draining set may have changed
 	if w.onStageChangeFunc != nil {
 		w.onStageChangeFunc()
 	}
 
-	// Recompute versions from remaining nodes
+	// Recompute versions from remaining nodes + ghost nodes
 	var versions []string
 	for _, obj := range w.informer.GetStore().List() {
 		remainingNode, ok := obj.(*corev1.Node)
@@ -193,6 +291,11 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 		}
 		versions = append(versions, remainingNode.Status.NodeInfo.KubeletVersion)
 	}
+	w.surgeMu.RLock()
+	for _, ghostState := range w.reimagingNodes {
+		versions = append(versions, ghostState.Version)
+	}
+	w.surgeMu.RUnlock()
 	w.stages.RecomputeVersions(versions)
 }
 
@@ -327,11 +430,92 @@ func formatAge(created time.Time) string {
 // buildNodeStates returns current state of all nodes (for initial load)
 func (w *NodeWatcher) buildNodeStates() []types.NodeState {
 	var states []types.NodeState
+
+	w.surgeMu.RLock()
+	defer w.surgeMu.RUnlock()
+
 	for _, obj := range w.informer.GetStore().List() {
-		node := obj.(*corev1.Node)
-		states = append(states, w.buildState(node))
+		node, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		state := w.buildState(node)
+		if w.surgeNodes[node.Name] {
+			state.SurgeNode = true
+		}
+		states = append(states, state)
 	}
+
+	// Include reimaging ghost nodes
+	for _, ghostState := range w.reimagingNodes {
+		states = append(states, ghostState)
+	}
+
 	return states
+}
+
+// isUpgradeActive returns true if an upgrade appears to be in progress.
+// Uses mixed versions or nodes in non-terminal stages as signals.
+// NOTE: Caller must NOT hold surgeMu — this method reads reimagingNodes.
+func (w *NodeWatcher) isUpgradeActive() bool {
+	lowest := w.stages.LowestVersion()
+	target := w.stages.TargetVersion()
+	if lowest != "" && target != "" && lowest != target {
+		return true
+	}
+
+	// Also check if any nodes are in active upgrade stages
+	for _, obj := range w.informer.GetStore().List() {
+		node, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		stage := w.stages.ComputeStage(node)
+		if stage == types.StageCordoned || stage == types.StageDraining || stage == types.StageReimaging {
+			return true
+		}
+	}
+
+	// Check if we already have reimaging ghost nodes
+	w.surgeMu.RLock()
+	hasGhosts := len(w.reimagingNodes) > 0
+	w.surgeMu.RUnlock()
+	return hasGhosts
+}
+
+// MarkSurgeNode adds a node to the surge tracking set
+func (w *NodeWatcher) MarkSurgeNode(nodeName, poolName string) {
+	w.surgeMu.Lock()
+	w.surgeNodes[nodeName] = true
+	w.surgeMu.Unlock()
+
+	// Retroactively mark the node as surge if it already exists in the informer
+	for _, obj := range w.informer.GetStore().List() {
+		node, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		if node.Name == nodeName {
+			state := w.buildState(node)
+			state.SurgeNode = true
+			w.emitter.EmitNodeState(state)
+			return
+		}
+	}
+}
+
+// UnmarkSurgeNode removes a node from the surge tracking set
+func (w *NodeWatcher) UnmarkSurgeNode(nodeName string) {
+	w.surgeMu.Lock()
+	delete(w.surgeNodes, nodeName)
+	w.surgeMu.Unlock()
+}
+
+// IsSurgeNode returns true if the node is a tracked surge node
+func (w *NodeWatcher) IsSurgeNode(nodeName string) bool {
+	w.surgeMu.RLock()
+	defer w.surgeMu.RUnlock()
+	return w.surgeNodes[nodeName]
 }
 
 func isNodeReady(node *corev1.Node) bool {

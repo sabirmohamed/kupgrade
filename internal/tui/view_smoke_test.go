@@ -36,7 +36,7 @@ func newPopulatedModel() Model {
 		"node-ready-1":     {Name: "node-ready-1", Stage: types.StageReady, Version: "v1.28.0", PodCount: 12, Ready: true, Age: "30d"},
 		"node-cordoned-1":  {Name: "node-cordoned-1", Stage: types.StageCordoned, Version: "v1.28.0", PodCount: 10, Ready: true, Age: "30d"},
 		"node-draining-1":  {Name: "node-draining-1", Stage: types.StageDraining, Version: "v1.28.0", PodCount: 5, Ready: true, DrainProgress: 50, InitialPodCount: 10, Age: "30d"},
-		"node-upgrading-1": {Name: "node-upgrading-1", Stage: types.StageUpgrading, Version: "v1.28.0", PodCount: 0, Ready: false, Age: "30d"},
+		"node-reimaging-1": {Name: "node-reimaging-1", Stage: types.StageReimaging, Version: "v1.28.0", PodCount: 0, Ready: false, Age: "30d"},
 		"node-complete-1":  {Name: "node-complete-1", Stage: types.StageComplete, Version: "v1.29.0", PodCount: 8, Ready: true, Age: "30d"},
 	}
 	m.rebuildNodesByStage()

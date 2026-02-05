@@ -45,7 +45,7 @@ func (c *Computer) ComputeStage(node *corev1.Node) types.NodeStage {
 	case (upgradeActive || completed) && version == target && ready && schedulable:
 		return types.StageComplete
 	case !ready:
-		return types.StageUpgrading
+		return types.StageReimaging
 	case !schedulable:
 		// NodeWatcher will correct to DRAINING when pods are actually evicted
 		return types.StageCordoned

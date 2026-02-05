@@ -72,13 +72,24 @@ func (m Model) renderVersionDisplay() string {
 	return versionStyle.Render(version)
 }
 
+// stageCountExcludingSurge returns the count of non-surge nodes in the given stage
+func (m Model) stageCountExcludingSurge(stage types.NodeStage) int {
+	count := 0
+	for _, name := range m.nodesByStage[stage] {
+		if node, ok := m.nodes[name]; ok && !node.SurgeNode {
+			count++
+		}
+	}
+	return count
+}
+
 // renderPipelineRow renders compact stage counts with arrows
 func (m Model) renderPipelineRow() string {
 	stages := types.AllStages()
 	var parts []string
 
 	for i, stage := range stages {
-		count := len(m.nodesByStage[stage])
+		count := m.stageCountExcludingSurge(stage)
 		name := string(stage)
 
 		var stageStr string
@@ -147,6 +158,17 @@ func (m Model) severityIcon(s types.Severity) string {
 
 // Helper functions
 
+// clamp constrains value between min and max
+func clamp(value, minVal, maxVal int) int {
+	if value < minVal {
+		return minVal
+	}
+	if value > maxVal {
+		return maxVal
+	}
+	return value
+}
+
 // sortedNodeNames returns all node names sorted alphabetically
 func (m Model) sortedNodeNames() []string {
 	names := make([]string, 0, len(m.nodes))
@@ -176,7 +198,7 @@ func (m Model) mainWidth() int {
 }
 
 // getFilteredPodList returns pods filtered by the current pod filter mode.
-// When no upgrade is active (no CORDONED/DRAINING/UPGRADING nodes), shows all pods.
+// When no upgrade is active (no CORDONED/DRAINING/REIMAGING nodes), shows all pods.
 func (m *Model) getFilteredPodList() []types.PodState {
 	affectedNodes := make(map[string]bool)
 	for _, name := range m.nodesByStage[types.StageCordoned] {
@@ -185,7 +207,7 @@ func (m *Model) getFilteredPodList() []types.PodState {
 	for _, name := range m.nodesByStage[types.StageDraining] {
 		affectedNodes[name] = true
 	}
-	for _, name := range m.nodesByStage[types.StageUpgrading] {
+	for _, name := range m.nodesByStage[types.StageReimaging] {
 		affectedNodes[name] = true
 	}
 
@@ -236,7 +258,7 @@ func (m *Model) getDrainNodes() []string {
 	var drainNodes []string
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageCordoned]...)
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageDraining]...)
-	drainNodes = append(drainNodes, m.nodesByStage[types.StageUpgrading]...)
+	drainNodes = append(drainNodes, m.nodesByStage[types.StageReimaging]...)
 	sort.Strings(drainNodes)
 	return drainNodes
 }

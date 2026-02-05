@@ -38,7 +38,7 @@ var (
 	colorReady     = lipgloss.Color("#787c99") // Muted grey - waiting
 	colorCordoned  = lipgloss.Color("#e0af68") // Yellow - warning/paused
 	colorDraining  = lipgloss.Color("#ff9e64") // Orange - active attention
-	colorUpgrading = lipgloss.Color("#7dcfff") // Bright cyan - in progress
+	colorReimaging = lipgloss.Color("#7dcfff") // Bright cyan - in progress
 	colorComplete  = lipgloss.Color("#9ece6a") // Green - done
 
 	// Semantic: Status colors
@@ -72,7 +72,7 @@ var stageColors = map[string]lipgloss.Color{
 	"READY":     colorReady,
 	"CORDONED":  colorCordoned,
 	"DRAINING":  colorDraining,
-	"UPGRADING": colorUpgrading,
+	"REIMAGING": colorReimaging,
 	"COMPLETE":  colorComplete,
 }
 

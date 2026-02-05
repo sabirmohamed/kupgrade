@@ -9,7 +9,7 @@ const (
 	StageReady     NodeStage = "READY"
 	StageCordoned  NodeStage = "CORDONED"
 	StageDraining  NodeStage = "DRAINING"
-	StageUpgrading NodeStage = "UPGRADING"
+	StageReimaging NodeStage = "REIMAGING"
 	StageComplete  NodeStage = "COMPLETE"
 )
 
@@ -23,6 +23,7 @@ type NodeState struct {
 	PodCount          int  // Total pods on node (for display)
 	EvictablePodCount int  // Non-DaemonSet pods (for drain progress)
 	Deleted           bool // true when node was deleted
+	SurgeNode         bool // true for AKS surge nodes (excluded from progress)
 
 	// Phase 2 fields
 	InitialPodCount int // Evictable pods when drain started
@@ -44,7 +45,7 @@ func AllStages() []NodeStage {
 		StageReady,
 		StageCordoned,
 		StageDraining,
-		StageUpgrading,
+		StageReimaging,
 		StageComplete,
 	}
 }

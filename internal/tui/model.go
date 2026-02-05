@@ -39,7 +39,7 @@ const (
 type PodFilterMode int
 
 const (
-	PodFilterDisrupting  PodFilterMode = iota // Pods on CORDONED/DRAINING/UPGRADING nodes (default)
+	PodFilterDisrupting  PodFilterMode = iota // Pods on CORDONED/DRAINING/REIMAGING nodes (default)
 	PodFilterRescheduled                      // Pods on COMPLETE nodes (did they land safely?)
 	PodFilterAll                              // All pods
 )
@@ -334,15 +334,17 @@ func (m *Model) nodesInSelectedStage() []string {
 	return m.nodesByStage[stage]
 }
 
-// getSortedNodeList returns nodes sorted by stage priority (action-needed first), then name
+// getSortedNodeList returns nodes sorted by stage priority (action-needed first), then name.
+// Surge nodes sort after all real nodes.
 func (m *Model) getSortedNodeList() []string {
-	var allNodes []string
+	var realNodes []string
+	var surgeNodeNames []string
 
-	// Priority order: DRAINING, CORDONED, UPGRADING, READY, COMPLETE
+	// Priority order: DRAINING, CORDONED, REIMAGING, READY, COMPLETE
 	stagePriority := []types.NodeStage{
 		types.StageDraining,
 		types.StageCordoned,
-		types.StageUpgrading,
+		types.StageReimaging,
 		types.StageReady,
 		types.StageComplete,
 	}
@@ -352,10 +354,16 @@ func (m *Model) getSortedNodeList() []string {
 		sorted := make([]string, len(nodes))
 		copy(sorted, nodes)
 		sort.Strings(sorted)
-		allNodes = append(allNodes, sorted...)
+		for _, name := range sorted {
+			if node, ok := m.nodes[name]; ok && node.SurgeNode {
+				surgeNodeNames = append(surgeNodeNames, name)
+			} else {
+				realNodes = append(realNodes, name)
+			}
+		}
 	}
 
-	return allNodes
+	return append(realNodes, surgeNodeNames...)
 }
 
 func (m *Model) rebuildNodesByStage() {
@@ -399,11 +407,23 @@ func versionCore(v string) string {
 }
 
 func (m *Model) totalNodes() int {
-	return len(m.nodes)
+	count := 0
+	for _, node := range m.nodes {
+		if !node.SurgeNode {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *Model) completedNodes() int {
-	return len(m.nodesByStage[types.StageComplete])
+	count := 0
+	for _, name := range m.nodesByStage[types.StageComplete] {
+		if node, ok := m.nodes[name]; ok && !node.SurgeNode {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *Model) progressPercent() int {
@@ -474,6 +494,7 @@ func isUpgradeEvent(t types.EventType) bool {
 		types.EventPodFailed,
 		types.EventPodDeleted,
 		types.EventMigration,
+		types.EventK8sNormal,
 		types.EventK8sWarning,
 		types.EventK8sError:
 		return true

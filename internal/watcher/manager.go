@@ -72,6 +72,9 @@ func NewManager(factory informers.SharedInformerFactory, namespace string, targe
 	m.pdbWatcher.SetOnChange(m.CheckPDBBlockers)
 	m.nodeWatcher.onStageChangeFunc = m.CheckPDBBlockers
 
+	// Wire surge event callback from EventWatcher to NodeWatcher
+	m.eventWatcher.surgeCallback = m.handleSurgeEvent
+
 	return m
 }
 
@@ -187,7 +190,10 @@ func (m *Manager) EmitBlocker(blocker types.Blocker) {
 func (m *Manager) RefreshNodeState(nodeName string) {
 	// Find the node in the informer store
 	for _, obj := range m.nodeWatcher.informer.GetStore().List() {
-		node := obj.(*corev1.Node)
+		node, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
 		if node.Name == nodeName {
 			m.EmitNodeState(m.nodeWatcher.buildState(node))
 			return
@@ -321,6 +327,22 @@ func isDaemonSetPod(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// handleSurgeEvent processes surge create/remove events from the EventWatcher.
+// NOTE: We only act on "created" events. The "Removing surge node" event arrives
+// BEFORE the actual node deletion, so we must NOT unmark here — otherwise onDelete
+// sees wasSurge=false and creates a ghost. Cleanup happens naturally in onDelete.
+func (m *Manager) handleSurgeEvent(nodeName, poolName string, created bool) {
+	if created {
+		m.nodeWatcher.MarkSurgeNode(nodeName, poolName)
+	}
+	// Don't unmark on "Removing" event — let onDelete handle cleanup
+}
+
+// IsSurgeNode returns true if the named node is a tracked surge node
+func (m *Manager) IsSurgeNode(nodeName string) bool {
+	return m.nodeWatcher.IsSurgeNode(nodeName)
 }
 
 // WaitForCacheSync waits for all caches to sync

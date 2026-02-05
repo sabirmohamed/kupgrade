@@ -138,8 +138,8 @@ func (m Model) renderDrainsTable(drainNodes []string) string {
 func buildDrainRow(node types.NodeState) []string {
 	progressBar := plainProgressBar(node.DrainProgress, 10)
 
-	// UPGRADING nodes have completed drain — show 100% progress
-	if node.Stage == types.StageUpgrading {
+	// REIMAGING nodes have completed drain — show 100% progress
+	if node.Stage == types.StageReimaging {
 		progressBar = plainProgressBar(100, 10)
 	}
 
@@ -154,7 +154,7 @@ func buildDrainRow(node types.NodeState) []string {
 		status = "evicting..."
 	} else if node.Stage == types.StageCordoned {
 		status = "waiting"
-	} else if node.Stage == types.StageUpgrading {
+	} else if node.Stage == types.StageReimaging {
 		status = "rebooting..."
 	} else {
 		status = "-"

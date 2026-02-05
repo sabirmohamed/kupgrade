@@ -193,59 +193,55 @@ func (m Model) renderDrainProgressSection() string {
 	return b.String()
 }
 
+// calcNodeListVisibleRows calculates visible rows for node list based on screen space
+func (m Model) calcNodeListVisibleRows() int {
+	blockerLines := m.calcBlockerLines()
+	eventsLines := min(len(m.events), 8)
+	reservedLines := 1 + 3 + blockerLines + eventsLines + 4 + 3
+	visibleRows := m.height - reservedLines
+	return clamp(visibleRows, 3, 15)
+}
+
+// calcBlockerLines calculates lines needed for blocker display
+func (m Model) calcBlockerLines() int {
+	if len(m.blockers) == 0 {
+		return 0
+	}
+	activeBlockers, riskBlockers := m.splitBlockersByTier()
+	lines := len(m.blockers) * 2 // Each blocker takes 2 lines
+	if len(activeBlockers) > 0 {
+		lines++ // "ACTIVE BLOCKERS" header
+	}
+	if len(riskBlockers) > 0 {
+		lines++ // "PDB RISKS" header
+	}
+	return lines + 2 // panel border padding
+}
+
+// calcNameWidth returns name column width based on terminal width
+func (m Model) calcNameWidth() int {
+	switch {
+	case m.mainWidth() > 120:
+		return 40
+	case m.mainWidth() > 100:
+		return 35
+	default:
+		return 30
+	}
+}
+
 // renderNodeList shows unified node list with selected row highlight
 func (m Model) renderNodeList() string {
 	var b strings.Builder
 
-	// Calculate visible height for node list
-	blockerLines := 0
-	if len(m.blockers) > 0 {
-		activeBlockers, riskBlockers := m.splitBlockersByTier()
-		// Each blocker takes 2 lines (name + detail), plus section headers
-		blockerLines = len(m.blockers) * 2
-		if len(activeBlockers) > 0 {
-			blockerLines++ // "ACTIVE BLOCKERS" header
-		}
-		if len(riskBlockers) > 0 {
-			blockerLines++ // "PDB RISKS" header
-		}
-		blockerLines += 2 // panel border padding
-	}
-	eventsLines := len(m.events)
-	if eventsLines > 8 {
-		eventsLines = 8
-	}
-	reservedLines := 1 + 3 + blockerLines + eventsLines + 4 + 3
-	visibleRows := m.height - reservedLines
-	if visibleRows < 3 {
-		visibleRows = 3
-	}
-	if visibleRows > 15 {
-		visibleRows = 15
-	}
-
-	// Get all nodes sorted by stage priority, then name
+	visibleRows := m.calcNodeListVisibleRows()
 	allNodes := m.getSortedNodeList()
+	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(allNodes))
 
-	// Calculate scroll offset
-	scrollOffset := 0
-	if m.listIndex >= visibleRows {
-		scrollOffset = m.listIndex - visibleRows + 1
-	}
-
-	// Show node count with total in title
-	total := len(allNodes)
-
-	titleStr := fmt.Sprintf("NODES (%d)", total)
-
+	// Header with hints
+	titleStr := fmt.Sprintf("NODES (%d)", len(allNodes))
 	hints := footerDescStyle.Render("↑↓ navigate • d describe")
-
-	titleLen := len(titleStr)
-	hintsLen := 20
-	spacing := m.mainWidth() - titleLen - hintsLen - 4
-	if spacing < 4 {
-		spacing = 4
-	}
+	spacing := max(m.mainWidth()-len(titleStr)-20-4, 4)
 
 	b.WriteString(panelTitleStyle.Render(titleStr))
 	b.WriteString(strings.Repeat(" ", spacing))
@@ -257,56 +253,42 @@ func (m Model) renderNodeList() string {
 		return b.String()
 	}
 
-	// Calculate column widths
-	nameWidth := 30
-	if m.mainWidth() > 100 {
-		nameWidth = 35
-	}
-	if m.mainWidth() > 120 {
-		nameWidth = 40
-	}
-
-	rowWidth := m.mainWidth() - 6
-	if rowWidth < 60 {
-		rowWidth = 60
-	}
-
-	endIdx := scrollOffset + visibleRows
-	if endIdx > len(allNodes) {
-		endIdx = len(allNodes)
-	}
+	nameWidth := m.calcNameWidth()
+	rowWidth := max(m.mainWidth()-6, 60)
+	endIdx := min(scrollOffset+visibleRows, len(allNodes))
 
 	for i := scrollOffset; i < endIdx; i++ {
-		nodeName := allNodes[i]
-		node := m.nodes[nodeName]
-
-		displayName := nodeName
-		if len(displayName) > nameWidth {
-			displayName = displayName[len(displayName)-nameWidth:]
-		}
-
-		pods := fmt.Sprintf("%d pods", node.PodCount)
-
-		version := node.Version
-		if version == "" {
-			version = "unknown"
-		}
-
-		lineContent := fmt.Sprintf("    %-*s    %8s    %-10s", nameWidth, displayName, pods, version)
-
-		if i == m.listIndex {
-			cursor := "► "
-			selectedLine := nodeListSelectedStyle.Width(rowWidth).Render(lineContent)
-			b.WriteString(cursor)
-			b.WriteString(selectedLine)
-		} else {
-			b.WriteString("  ")
-			b.WriteString(lineContent)
-		}
-		b.WriteString("\n")
+		b.WriteString(m.renderNodeListRow(allNodes[i], i, nameWidth, rowWidth))
 	}
 
 	return b.String()
+}
+
+// renderNodeListRow renders a single row in the node list
+func (m Model) renderNodeListRow(nodeName string, idx, nameWidth, rowWidth int) string {
+	node := m.nodes[nodeName]
+
+	displayName := nodeName
+	if len(displayName) > nameWidth {
+		displayName = displayName[len(displayName)-nameWidth:]
+	}
+
+	version := node.Version
+	if version == "" {
+		version = "unknown"
+	}
+
+	surgeLabel := ""
+	if node.SurgeNode {
+		surgeLabel = " SURGE"
+	}
+
+	lineContent := fmt.Sprintf("    %-*s    %8s    %-10s%s", nameWidth, displayName, fmt.Sprintf("%d pods", node.PodCount), version, surgeLabel)
+
+	if idx == m.listIndex {
+		return "► " + nodeListSelectedStyle.Width(rowWidth).Render(lineContent) + "\n"
+	}
+	return "  " + lineContent + "\n"
 }
 
 // renderEventsSection shows latest events for overview
