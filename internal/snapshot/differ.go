@@ -26,6 +26,20 @@ var unhealthyStatuses = map[string]bool{
 	"Init:CreateContainerConfigError": true,
 }
 
+// determineCategory returns the diff category based on before/after health states.
+func determineCategory(beforeHealthy, afterHealthy bool) DiffCategory {
+	switch {
+	case beforeHealthy && afterHealthy:
+		return CategoryUnchanged
+	case beforeHealthy && !afterHealthy:
+		return CategoryNewIssue
+	case !beforeHealthy && !afterHealthy:
+		return CategoryPreExisting
+	default: // !beforeHealthy && afterHealthy
+		return CategoryResolved
+	}
+}
+
 // isHealthy returns true if a workload has sufficient ready replicas
 // and no pods in known-bad states. Workloads where all pods have
 // Succeeded (Jobs, CronJobs, PodTemplates, etc.) are treated as healthy.
@@ -103,18 +117,7 @@ func Diff(before, after *types.Snapshot) *DiffReport {
 
 		beforeHealthy := isHealthy(beforeWorkload)
 		afterHealthy := isHealthy(afterWorkload)
-
-		var category DiffCategory
-		switch {
-		case beforeHealthy && afterHealthy:
-			category = CategoryUnchanged
-		case beforeHealthy && !afterHealthy:
-			category = CategoryNewIssue
-		case !beforeHealthy && !afterHealthy:
-			category = CategoryPreExisting
-		case !beforeHealthy && afterHealthy:
-			category = CategoryResolved
-		}
+		category := determineCategory(beforeHealthy, afterHealthy)
 
 		report.WorkloadDiffs = append(report.WorkloadDiffs, WorkloadDiff{
 			Namespace: beforeWorkload.Namespace,

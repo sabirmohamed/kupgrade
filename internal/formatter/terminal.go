@@ -94,66 +94,26 @@ func (f *TerminalFormatter) FormatDiffReport(report *snapshot.DiffReport, showAl
 	// Group workload diffs by category.
 	grouped := groupByCategory(report.WorkloadDiffs)
 
-	// NEW_ISSUE section — always shown, most prominent.
-	if items, ok := grouped[snapshot.CategoryNewIssue]; ok {
-		builder.WriteString("  [NEW_ISSUE] — investigate, likely caused by upgrade\n")
-		builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
-		for _, diff := range items {
-			writeWorkloadDiff(&builder, &diff)
-		}
-		builder.WriteString("\n")
+	// Define category sections in display order.
+	categorySections := []categorySection{
+		{snapshot.CategoryNewIssue, "NEW_ISSUE", "investigate, likely caused by upgrade", renderFull, true},
+		{snapshot.CategoryPreExisting, "PRE_EXISTING", "already broken before upgrade", renderFull, true},
+		{snapshot.CategoryResolved, "RESOLVED", "was broken, now healthy", renderFull, true},
+		{snapshot.CategoryRemoved, "REMOVED", "existed before, gone now", renderSimple, true},
+		{snapshot.CategoryNewWorkload, "NEW_WORKLOAD", "new and unhealthy, may be unrelated to upgrade", renderAfterOnly, true},
+		{snapshot.CategoryUnchanged, "UNCHANGED", "healthy before and after", renderSimple, showAll},
 	}
 
-	// PRE_EXISTING section.
-	if items, ok := grouped[snapshot.CategoryPreExisting]; ok {
-		builder.WriteString("  [PRE_EXISTING] — already broken before upgrade\n")
-		builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
-		for _, diff := range items {
-			writeWorkloadDiff(&builder, &diff)
+	// Render each category section.
+	for _, section := range categorySections {
+		if !section.show {
+			continue
 		}
-		builder.WriteString("\n")
-	}
-
-	// RESOLVED section.
-	if items, ok := grouped[snapshot.CategoryResolved]; ok {
-		builder.WriteString("  [RESOLVED] — was broken, now healthy\n")
-		builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
-		for _, diff := range items {
-			writeWorkloadDiff(&builder, &diff)
+		items, ok := grouped[section.category]
+		if !ok {
+			continue
 		}
-		builder.WriteString("\n")
-	}
-
-	// REMOVED section.
-	if items, ok := grouped[snapshot.CategoryRemoved]; ok {
-		builder.WriteString("  [REMOVED] — existed before, gone now\n")
-		builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
-		for _, diff := range items {
-			builder.WriteString(fmt.Sprintf("    %s/%s (%s)\n", diff.Kind, diff.Name, diff.Namespace))
-		}
-		builder.WriteString("\n")
-	}
-
-	// NEW_WORKLOAD section.
-	if items, ok := grouped[snapshot.CategoryNewWorkload]; ok {
-		builder.WriteString("  [NEW_WORKLOAD] — new and unhealthy, may be unrelated to upgrade\n")
-		builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
-		for _, diff := range items {
-			writeWorkloadDiffAfterOnly(&builder, &diff)
-		}
-		builder.WriteString("\n")
-	}
-
-	// UNCHANGED section — hidden unless --all.
-	if showAll {
-		if items, ok := grouped[snapshot.CategoryUnchanged]; ok {
-			builder.WriteString("  [UNCHANGED] — healthy before and after\n")
-			builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
-			for _, diff := range items {
-				builder.WriteString(fmt.Sprintf("    %s/%s (%s)\n", diff.Kind, diff.Name, diff.Namespace))
-			}
-			builder.WriteString("\n")
-		}
+		writeCategorySection(&builder, section.title, section.description, items, section.renderer)
 	}
 
 	// Node changes section.
@@ -188,6 +148,41 @@ func (f *TerminalFormatter) FormatDiffReport(report *snapshot.DiffReport, showAl
 	}
 
 	return builder.String()
+}
+
+// categoryRenderer defines how to render items within a category section.
+type categoryRenderer int
+
+const (
+	renderFull      categoryRenderer = iota // Before/After with pod status details.
+	renderAfterOnly                         // After-only with pod status details.
+	renderSimple                            // Just workload identifier, no details.
+)
+
+// categorySection defines a category's display configuration.
+type categorySection struct {
+	category    snapshot.DiffCategory
+	title       string
+	description string
+	renderer    categoryRenderer
+	show        bool
+}
+
+// writeCategorySection writes a category header and its items using the specified renderer.
+func writeCategorySection(builder *strings.Builder, title, description string, items []snapshot.WorkloadDiff, renderer categoryRenderer) {
+	fmt.Fprintf(builder, "  [%s] — %s\n", title, description)
+	builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
+	for _, diff := range items {
+		switch renderer {
+		case renderFull:
+			writeWorkloadDiff(builder, &diff)
+		case renderAfterOnly:
+			writeWorkloadDiffAfterOnly(builder, &diff)
+		case renderSimple:
+			fmt.Fprintf(builder, "    %s/%s (%s)\n", diff.Kind, diff.Name, diff.Namespace)
+		}
+	}
+	builder.WriteString("\n")
 }
 
 func writeWorkloadDiff(builder *strings.Builder, diff *snapshot.WorkloadDiff) {

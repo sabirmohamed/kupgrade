@@ -79,6 +79,111 @@ func nodeGroupStarts(podList []types.PodState) []bool {
 	return starts
 }
 
+// Pod table column indices for StyleFunc
+const (
+	podColNamespace = 0
+	podColName      = 1
+	podColReady     = 2
+	podColStatus    = 3
+	podColRestarts  = 4
+	podColProbe     = 5
+	podColOwner     = 6
+	podColNode      = 7
+	podColAge       = 8
+)
+
+// podCellStyle computes the style for a single cell in the pods table.
+// It handles header styling, alternating backgrounds, node group separators,
+// selected row highlighting, and per-cell coloring based on pod state.
+func (m Model) podCellStyle(row, col int, podList []types.PodState, groupStarts []bool) lipgloss.Style {
+	style := lipgloss.NewStyle().Padding(0, 1)
+
+	if row == table.HeaderRow {
+		return m.podHeaderStyle(style, col)
+	}
+
+	style = m.podRowBackground(style, row)
+	style = m.podGroupSeparator(style, row, groupStarts)
+	style = m.podSelectedHighlight(style, row)
+	style = m.podColumnAlignment(style, col)
+
+	if row >= len(podList) {
+		return style
+	}
+
+	return m.podCellColor(style, col, podList[row])
+}
+
+// podHeaderStyle applies header-specific styling (muted, bold, right-align numerics)
+func (m Model) podHeaderStyle(style lipgloss.Style, col int) lipgloss.Style {
+	style = style.Foreground(colorTextMuted).Bold(true)
+	switch col {
+	case podColReady, podColRestarts, podColAge:
+		style = style.Align(lipgloss.Right)
+	}
+	return style
+}
+
+// podRowBackground applies alternating row backgrounds
+func (m Model) podRowBackground(style lipgloss.Style, row int) lipgloss.Style {
+	if row%2 == 0 {
+		return style.Background(colorBg)
+	}
+	return style.Background(colorBgAlt)
+}
+
+// podGroupSeparator adds top border on first pod of a new node group
+func (m Model) podGroupSeparator(style lipgloss.Style, row int, groupStarts []bool) lipgloss.Style {
+	if groupStarts != nil && row < len(groupStarts) && groupStarts[row] && row > 0 {
+		return style.BorderTop(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(colorBorderDim)
+	}
+	return style
+}
+
+// podSelectedHighlight applies highlight styling to the selected row
+func (m Model) podSelectedHighlight(style lipgloss.Style, row int) lipgloss.Style {
+	if row == m.listIndex {
+		return style.Background(colorSelected).Foreground(colorTextBold)
+	}
+	return style
+}
+
+// podColumnAlignment applies right-alignment to numeric columns
+func (m Model) podColumnAlignment(style lipgloss.Style, col int) lipgloss.Style {
+	switch col {
+	case podColReady, podColRestarts, podColAge:
+		return style.Align(lipgloss.Right)
+	}
+	return style
+}
+
+// podCellColor applies per-cell foreground coloring based on pod state
+func (m Model) podCellColor(style lipgloss.Style, col int, pod types.PodState) lipgloss.Style {
+	switch col {
+	case podColReady:
+		return style.Foreground(readyColor(pod))
+	case podColStatus:
+		return style.Foreground(statusColor(pod.Phase))
+	case podColRestarts:
+		return style.Foreground(restartColor(pod.Restarts))
+	case podColProbe:
+		return style.Foreground(probeColor(pod))
+	case podColOwner:
+		if pod.OwnerKind == "DaemonSet" {
+			return style.Foreground(colorYellow)
+		}
+	case podColNode:
+		if pod.NodeName != "" {
+			if _, exists := m.nodes[pod.NodeName]; !exists {
+				return style.Foreground(colorError)
+			}
+		}
+	}
+	return style
+}
+
 // renderPodsTable renders the pods table using lipgloss/table with per-cell coloring
 func (m Model) renderPodsTable(podList []types.PodState) string {
 	// Skip node group separators when fuzzy search is active (results are ranked by score)
@@ -124,73 +229,7 @@ func (m Model) renderPodsTable(podList []types.PodState) string {
 		BorderHeader(true).
 		BorderStyle(tableBorderStyle).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			style := lipgloss.NewStyle().Padding(0, 1)
-			if row == table.HeaderRow {
-				style = style.Foreground(colorTextMuted).Bold(true)
-				// Right-align numeric header columns
-				switch col {
-				case 2, 4, 8: // READY, RESTARTS, AGE
-					style = style.Align(lipgloss.Right)
-				}
-				return style
-			}
-
-			actualIdx := row
-
-			// Alternating row backgrounds
-			if actualIdx%2 == 0 {
-				style = style.Background(colorBg)
-			} else {
-				style = style.Background(colorBgAlt)
-			}
-
-			// Node group separator: top border on first pod of new node group
-			// (only when not in fuzzy search mode)
-			if groupStarts != nil && actualIdx < len(groupStarts) && groupStarts[actualIdx] && actualIdx > 0 {
-				style = style.BorderTop(true).
-					BorderStyle(lipgloss.NormalBorder()).
-					BorderForeground(colorBorderDim)
-			}
-
-			// Selected row highlight
-			if actualIdx == m.listIndex {
-				style = style.Background(colorSelected).Foreground(colorTextBold)
-			}
-
-			// Right-align numeric columns
-			switch col {
-			case 2, 4, 8: // READY, RESTARTS, AGE
-				style = style.Align(lipgloss.Right)
-			}
-
-			if actualIdx >= len(podList) {
-				return style
-			}
-			pod := podList[actualIdx]
-
-			// Per-cell coloring
-			switch col {
-			case 2: // READY
-				style = style.Foreground(readyColor(pod))
-			case 3: // STATUS
-				style = style.Foreground(statusColor(pod.Phase))
-			case 4: // RESTARTS
-				style = style.Foreground(restartColor(pod.Restarts))
-			case 5: // PROBE
-				style = style.Foreground(probeColor(pod))
-			case 6: // OWNER
-				if pod.OwnerKind == "DaemonSet" {
-					style = style.Foreground(colorYellow)
-				}
-			case 7: // NODE
-				if pod.NodeName != "" {
-					if _, exists := m.nodes[pod.NodeName]; !exists {
-						style = style.Foreground(colorError)
-					}
-				}
-			}
-
-			return style
+			return m.podCellStyle(row, col, podList, groupStarts)
 		})
 
 	rendered := t.String()

@@ -71,55 +71,7 @@ func (m Model) renderDrainsTable(drainNodes []string) string {
 		BorderHeader(true).
 		BorderStyle(tableBorderStyle).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			style := lipgloss.NewStyle().Padding(0, 1)
-			if row == table.HeaderRow {
-				style = style.Foreground(colorTextMuted).Bold(true)
-				if col == 3 { // PODS
-					style = style.Align(lipgloss.Right)
-				}
-				return style
-			}
-
-			actualIdx := row
-
-			// Alternating row backgrounds
-			if actualIdx%2 == 0 {
-				style = style.Background(colorBg)
-			} else {
-				style = style.Background(colorBgAlt)
-			}
-
-			// Selected row highlight
-			if actualIdx == m.listIndex {
-				style = style.Background(colorSelected).Foreground(colorTextBold)
-			}
-
-			// Right-align PODS column
-			if col == 3 {
-				style = style.Align(lipgloss.Right)
-			}
-
-			if actualIdx >= len(drainNodes) {
-				return style
-			}
-			node := m.nodes[drainNodes[actualIdx]]
-
-			switch col {
-			case 1: // STAGE
-				if sc, ok := stageColors[string(node.Stage)]; ok {
-					style = style.Foreground(sc)
-				}
-			case 4: // STATUS
-				if node.Blocked {
-					style = style.Foreground(colorError) // red for blocked
-				} else if node.Stage == types.StageDraining {
-					style = style.Foreground(colorCordoned) // yellow for evicting
-				} else {
-					style = style.Foreground(colorTextMuted)
-				}
-			}
-
-			return style
+			return m.drainCellStyle(row, col, drainNodes)
 		})
 
 	rendered := t.String()
@@ -132,6 +84,78 @@ func (m Model) renderDrainsTable(drainNodes []string) string {
 	}
 
 	return rendered
+}
+
+// drainCellStyle returns the lipgloss style for a cell in the drains table.
+// Extracted from renderDrainsTable to reduce cyclomatic complexity.
+func (m Model) drainCellStyle(row, col int, drainNodes []string) lipgloss.Style {
+	style := lipgloss.NewStyle().Padding(0, 1)
+
+	// Header row styling
+	if row == table.HeaderRow {
+		style = style.Foreground(colorTextMuted).Bold(true)
+		if col == 3 { // PODS
+			style = style.Align(lipgloss.Right)
+		}
+		return style
+	}
+
+	// Row background (alternating)
+	style = m.drainRowBackground(style, row)
+
+	// Right-align PODS column
+	if col == 3 {
+		style = style.Align(lipgloss.Right)
+	}
+
+	// Bounds check before accessing node data
+	if row >= len(drainNodes) {
+		return style
+	}
+
+	// Per-column coloring based on node state
+	node := m.nodes[drainNodes[row]]
+	return m.drainColumnColor(style, col, node)
+}
+
+// drainRowBackground applies alternating background and selected row highlight.
+func (m Model) drainRowBackground(style lipgloss.Style, row int) lipgloss.Style {
+	if row%2 == 0 {
+		style = style.Background(colorBg)
+	} else {
+		style = style.Background(colorBgAlt)
+	}
+
+	// Selected row highlight overrides alternating background
+	if row == m.listIndex {
+		style = style.Background(colorSelected).Foreground(colorTextBold)
+	}
+
+	return style
+}
+
+// drainColumnColor applies per-column foreground colors based on node state.
+func (m Model) drainColumnColor(style lipgloss.Style, col int, node types.NodeState) lipgloss.Style {
+	switch col {
+	case 1: // STAGE
+		if stageColor, ok := stageColors[string(node.Stage)]; ok {
+			style = style.Foreground(stageColor)
+		}
+	case 4: // STATUS
+		style = m.drainStatusColor(style, node)
+	}
+	return style
+}
+
+// drainStatusColor returns the style for the STATUS column based on node state.
+func (m Model) drainStatusColor(style lipgloss.Style, node types.NodeState) lipgloss.Style {
+	if node.Blocked {
+		return style.Foreground(colorError) // red for blocked
+	}
+	if node.Stage == types.StageDraining {
+		return style.Foreground(colorCordoned) // yellow for evicting
+	}
+	return style.Foreground(colorTextMuted)
 }
 
 // buildDrainRow builds a table row for a drain node (plain text, coloring via StyleFunc)

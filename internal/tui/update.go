@@ -520,62 +520,88 @@ func (m *Model) handlePodUpdate(pod types.PodState) {
 //   - Cleared + Name + empty NodeName: clear all blockers for that PDB (PDB deleted)
 //   - Cleared + Name + NodeName: clear specific node's blocker
 func (m *Model) handleBlockerUpdate(blocker types.Blocker) {
-	// Build key function - includes NodeName for per-node tracking
-	makeKey := func(b types.Blocker) string {
-		return string(b.Type) + "/" + b.Namespace + "/" + b.Name + "/" + b.NodeName
-	}
-
-	blockerKey := makeKey(blocker)
-
 	if blocker.Cleared {
-		if blocker.Name == "" && blocker.NodeName == "" {
-			// Clear all blockers of this type (full replacement signal)
-			filtered := m.blockers[:0]
-			for _, b := range m.blockers {
-				if b.Type != blocker.Type {
-					filtered = append(filtered, b)
-				}
-			}
-			m.blockers = filtered
-		} else if blocker.NodeName == "" {
-			// Clear all blockers for this PDB (PDB was deleted)
-			baseKey := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name + "/"
-			filtered := m.blockers[:0]
-			for _, b := range m.blockers {
-				key := makeKey(b)
-				if len(key) < len(baseKey) || key[:len(baseKey)] != baseKey {
-					filtered = append(filtered, b)
-				}
-			}
-			m.blockers = filtered
-		} else {
-			// Clear specific node's blocker
-			for i, b := range m.blockers {
-				if makeKey(b) == blockerKey {
-					m.blockers = append(m.blockers[:i], m.blockers[i+1:]...)
-					return
-				}
-			}
-		}
+		m.handleBlockerClear(blocker)
+		return
+	}
+	m.updateOrAddBlocker(blocker)
+}
+
+// handleBlockerClear removes blockers based on the clearing signal type.
+func (m *Model) handleBlockerClear(blocker types.Blocker) {
+	// Clear all blockers of this type (full replacement signal)
+	if blocker.Name == "" && blocker.NodeName == "" {
+		m.clearBlockersOfType(blocker.Type)
 		return
 	}
 
-	// Update existing or add new
+	// Clear all blockers for this PDB (PDB was deleted)
+	if blocker.NodeName == "" {
+		m.clearBlockersForPDB(blocker)
+		return
+	}
+
+	// Clear specific node's blocker
+	m.clearSpecificBlocker(blockerKey(blocker))
+}
+
+// clearBlockersOfType removes all blockers matching the given type.
+func (m *Model) clearBlockersOfType(blockerType types.BlockerType) {
+	filtered := m.blockers[:0]
+	for _, b := range m.blockers {
+		if b.Type != blockerType {
+			filtered = append(filtered, b)
+		}
+	}
+	m.blockers = filtered
+}
+
+// clearBlockersForPDB removes all blockers for a specific PDB (all nodes).
+func (m *Model) clearBlockersForPDB(blocker types.Blocker) {
+	baseKey := string(blocker.Type) + "/" + blocker.Namespace + "/" + blocker.Name + "/"
+	filtered := m.blockers[:0]
+	for _, b := range m.blockers {
+		key := blockerKey(b)
+		if len(key) < len(baseKey) || key[:len(baseKey)] != baseKey {
+			filtered = append(filtered, b)
+		}
+	}
+	m.blockers = filtered
+}
+
+// clearSpecificBlocker removes the blocker with the exact key, if found.
+func (m *Model) clearSpecificBlocker(targetKey string) {
 	for i, b := range m.blockers {
-		if makeKey(b) == blockerKey {
-			// Update existing - preserve StartTime if already set
-			if !blocker.StartTime.IsZero() {
-				m.blockers[i] = blocker
-			} else if !b.StartTime.IsZero() {
-				blocker.StartTime = b.StartTime
-				m.blockers[i] = blocker
-			} else {
-				m.blockers[i] = blocker
-			}
+		if blockerKey(b) == targetKey {
+			m.blockers = append(m.blockers[:i], m.blockers[i+1:]...)
+			return
+		}
+	}
+}
+
+// updateOrAddBlocker updates an existing blocker or appends a new one.
+func (m *Model) updateOrAddBlocker(blocker types.Blocker) {
+	targetKey := blockerKey(blocker)
+	for i, b := range m.blockers {
+		if blockerKey(b) == targetKey {
+			m.blockers[i] = m.mergeBlockerStartTime(blocker, b)
 			return
 		}
 	}
 	m.blockers = append(m.blockers, blocker)
+}
+
+// mergeBlockerStartTime preserves StartTime from existing blocker if new one has zero time.
+func (m *Model) mergeBlockerStartTime(newBlocker, existingBlocker types.Blocker) types.Blocker {
+	if newBlocker.StartTime.IsZero() && !existingBlocker.StartTime.IsZero() {
+		newBlocker.StartTime = existingBlocker.StartTime
+	}
+	return newBlocker
+}
+
+// blockerKey builds a unique key for a blocker including NodeName for per-node tracking.
+func blockerKey(b types.Blocker) string {
+	return string(b.Type) + "/" + b.Namespace + "/" + b.Name + "/" + b.NodeName
 }
 
 // handleEvent adds event to display list

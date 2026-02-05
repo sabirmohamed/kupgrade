@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
 // renderEventsScreen renders the full events log screen
@@ -11,103 +13,143 @@ func (m Model) renderEventsScreen() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
 
-	// Filter indicator
-	filterLine := m.renderEventFilterBar()
-	b.WriteString(filterLine)
+	b.WriteString(m.renderEventFilterBar())
 	b.WriteString("\n\n")
 
 	events := m.filteredEvents()
 
 	if len(events) == 0 {
-		if m.eventFilter == EventFilterAll {
-			b.WriteString(footerDescStyle.Render("  Waiting for events..."))
-		} else {
-			b.WriteString(footerDescStyle.Render(fmt.Sprintf("  No %s events", strings.ToLower(m.eventFilterName()))))
-		}
+		b.WriteString(m.renderEmptyEventsMessage())
 	} else if m.eventAggregated {
-		// Aggregated view
-		aggregated := aggregateEvents(events)
-		for i, ag := range aggregated {
-			cursor := "  "
-			if i == m.listIndex {
-				cursor = "► "
-			}
-
-			ts := timestampStyle.Render(ag.Timestamp.Format("15:04:05"))
-			icon := m.severityIcon(ag.Severity)
-
-			// Expand/collapse indicator
-			expandIcon := "▸"
-			if m.expandedGroup == ag.Reason {
-				expandIcon = "▾"
-			}
-
-			// Main line
-			var line string
-			if ag.Count > 1 {
-				line = fmt.Sprintf("%s%s %s %s %s", cursor, ts, icon, expandIcon, ag.Format(icon))
-			} else {
-				line = fmt.Sprintf("%s%s %s   %s", cursor, ts, icon, ag.Format(icon))
-			}
-			b.WriteString(line)
-			b.WriteString("\n")
-
-			// Show expanded events for this group
-			if m.expandedGroup == ag.Reason && ag.Count > 1 {
-				for _, e := range events {
-					reason := extractReason(e.Message)
-					if reason == ag.Reason {
-						subTs := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
-						subIcon := m.severityIcon(e.Severity)
-						nodeName := e.NodeName
-						if nodeName == "" {
-							nodeName = "-"
-						}
-						// Use available width minus prefix (timestamp, icon, node, indent)
-						msgWidth := m.mainWidth() - 45
-						if msgWidth < 40 {
-							msgWidth = 40
-						}
-						subLine := fmt.Sprintf("       %s %s %-12s %s",
-							subTs, subIcon, nodeName, truncateMessage(e.Message, msgWidth))
-						b.WriteString(footerDescStyle.Render(subLine))
-						b.WriteString("\n")
-					}
-				}
-			} else if i == m.listIndex && ag.Count > 1 {
-				// Show hint to expand
-				hintLine := footerDescStyle.Render("       (press 'e' to expand)")
-				b.WriteString(hintLine)
-				b.WriteString("\n")
-			}
-		}
+		b.WriteString(m.renderAggregatedEventsList(events))
 	} else {
-		// Raw view
-		for i, e := range events {
-			cursor := "  "
-			if i == m.listIndex {
-				cursor = "► "
-			}
-
-			ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
-			icon := m.severityIcon(e.Severity)
-			nodeName := e.NodeName
-			if nodeName == "" {
-				nodeName = "-"
-			}
-
-			line := fmt.Sprintf("%s%s %s %-15s %s",
-				cursor, ts, icon, nodeName, e.Message)
-
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
+		b.WriteString(m.renderRawEventsList(events))
 	}
 
 	b.WriteString("\n")
 	b.WriteString(m.renderEventsFooter())
 
 	return m.placeContent(b.String())
+}
+
+// renderEmptyEventsMessage returns the message to display when no events match the filter
+func (m Model) renderEmptyEventsMessage() string {
+	if m.eventFilter == EventFilterAll {
+		return footerDescStyle.Render("  Waiting for events...")
+	}
+	return footerDescStyle.Render(fmt.Sprintf("  No %s events", strings.ToLower(m.eventFilterName())))
+}
+
+// renderAggregatedEventsList renders events grouped by reason
+func (m Model) renderAggregatedEventsList(events []types.Event) string {
+	var b strings.Builder
+	aggregated := aggregateEvents(events)
+
+	for i, ag := range aggregated {
+		b.WriteString(m.renderAggregatedEventRow(i, ag))
+		b.WriteString(m.renderExpandedEventsOrHint(i, ag, events))
+	}
+
+	return b.String()
+}
+
+// renderAggregatedEventRow renders a single aggregated event row
+func (m Model) renderAggregatedEventRow(index int, ag AggregatedEvent) string {
+	cursor := "  "
+	if index == m.listIndex {
+		cursor = "► "
+	}
+
+	ts := timestampStyle.Render(ag.Timestamp.Format("15:04:05"))
+	icon := m.severityIcon(ag.Severity)
+
+	expandIcon := "▸"
+	if m.expandedGroup == ag.Reason {
+		expandIcon = "▾"
+	}
+
+	var line string
+	if ag.Count > 1 {
+		line = fmt.Sprintf("%s%s %s %s %s", cursor, ts, icon, expandIcon, ag.Format(icon))
+	} else {
+		line = fmt.Sprintf("%s%s %s   %s", cursor, ts, icon, ag.Format(icon))
+	}
+
+	return line + "\n"
+}
+
+// renderExpandedEventsOrHint renders expanded event details or the expand hint
+func (m Model) renderExpandedEventsOrHint(index int, ag AggregatedEvent, events []types.Event) string {
+	if ag.Count <= 1 {
+		return ""
+	}
+
+	if m.expandedGroup == ag.Reason {
+		return m.renderExpandedEvents(ag.Reason, events)
+	}
+
+	if index == m.listIndex {
+		return footerDescStyle.Render("       (press 'e' to expand)") + "\n"
+	}
+
+	return ""
+}
+
+// renderExpandedEvents renders the individual events within an expanded group
+func (m Model) renderExpandedEvents(reason string, events []types.Event) string {
+	var b strings.Builder
+
+	msgWidth := m.mainWidth() - 45
+	if msgWidth < 40 {
+		msgWidth = 40
+	}
+
+	for _, e := range events {
+		if extractReason(e.Message) != reason {
+			continue
+		}
+
+		subTs := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
+		subIcon := m.severityIcon(e.Severity)
+		nodeName := e.NodeName
+		if nodeName == "" {
+			nodeName = "-"
+		}
+
+		subLine := fmt.Sprintf("       %s %s %-12s %s",
+			subTs, subIcon, nodeName, truncateMessage(e.Message, msgWidth))
+		b.WriteString(footerDescStyle.Render(subLine))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// renderRawEventsList renders events in raw (non-aggregated) format
+func (m Model) renderRawEventsList(events []types.Event) string {
+	var b strings.Builder
+
+	for i, e := range events {
+		cursor := "  "
+		if i == m.listIndex {
+			cursor = "► "
+		}
+
+		ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
+		icon := m.severityIcon(e.Severity)
+		nodeName := e.NodeName
+		if nodeName == "" {
+			nodeName = "-"
+		}
+
+		line := fmt.Sprintf("%s%s %s %-15s %s",
+			cursor, ts, icon, nodeName, e.Message)
+
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }
 
 // renderEventFilterBar renders the filter toggle bar
