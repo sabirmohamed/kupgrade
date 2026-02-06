@@ -25,9 +25,9 @@ case "$OS" in
   *) echo "Unsupported OS: $OS"; exit 1 ;;
 esac
 
-# Get latest release version
+# Get latest release version (includes prereleases)
 echo "Fetching latest release..."
-VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" | grep '"tag_name"' | head -1 | sed -E 's/.*"v([^"]+)".*/\1/')
 
 if [ -z "$VERSION" ]; then
   echo "Failed to fetch latest version"
