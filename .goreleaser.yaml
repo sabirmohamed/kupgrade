@@ -1,0 +1,39 @@
+# Minimal GoReleaser config — curl install only
+version: 2
+
+builds:
+  - main: ./cmd/kupgrade
+    binary: kupgrade
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/sabirmohamed/kupgrade/internal/cli.Version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: false
+  prerelease: auto
+  header: |
+    Real-time Kubernetes upgrade observer — nodes, pods, PDBs, and events in one TUI.
+
+    ### Install
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/sabirmohamed/kupgrade/main/install.sh | bash
+    ```
+
+    Then run `kupgrade watch`
