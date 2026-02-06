@@ -166,7 +166,13 @@ func firstMatchingPod(pdb *policyv1.PodDisruptionBudget, nodeName string, pods [
 // BuildBlockers evaluates all PDBs against the current cluster state and returns
 // two tiers of blockers:
 //   - Risk (Tier 1): PDB has DisruptionsAllowed == 0, may block future drains
-//   - Active (Tier 2): PDB is blocking a specific draining node right now
+//   - Active (Tier 2): PDB is blocking a specific draining node right now AND
+//     the drain is stalled (no evictions for DrainStallThreshold)
+//
+// The isDrainStalled function checks if a node's drain has been stuck. This
+// prevents transient PDB blocks (normal pacing during drain) from appearing
+// as active blockers — only persistent blocks that require user intervention
+// are shown.
 //
 // Uses only Kubernetes-standard objects. No provider-specific logic.
 // blockerKey builds a stable key for tracking blocker start times.
@@ -174,7 +180,7 @@ func blockerKey(namespace, name, nodeName string) string {
 	return namespace + "/" + name + "/" + nodeName
 }
 
-func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod) []types.Blocker {
+func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod, isDrainStalled func(nodeName string) bool) []types.Blocker {
 	var blockers []types.Blocker
 	now := time.Now()
 	activeKeys := make(map[string]bool)
@@ -192,31 +198,43 @@ func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod) [
 		detail := w.GetPDBDetail(pdb.Namespace, pdb.Name)
 
 		// Check if this PDB actively blocks any draining node (Tier 2)
+		// A PDB is only an active blocker if:
+		// 1. It's at risk (DisruptionsAllowed == 0)
+		// 2. Its selector matches pods on the draining node
+		// 3. The drain is stalled (no evictions for 30+ seconds)
+		// This filters out transient PDB pacing during normal drain progression.
 		activeOnNode := false
 		for _, nodeName := range drainingNodes {
 			if isBlockingNode(pdb, nodeName, pods) {
-				podName := firstMatchingPod(pdb, nodeName, pods)
 				key := blockerKey(pdb.Namespace, pdb.Name, nodeName)
-				activeKeys[key] = true
 
-				// Preserve existing StartTime or set new one
+				// Track start time even if not yet stalled (for accurate duration)
 				startTime, exists := w.blockerStartTimes[key]
 				if !exists {
 					startTime = now
 					w.blockerStartTimes[key] = startTime
 				}
 
-				blockers = append(blockers, types.Blocker{
-					Type:      types.BlockerPDB,
-					Tier:      types.BlockerTierActive,
-					Name:      pdb.Name,
-					Namespace: pdb.Namespace,
-					NodeName:  nodeName,
-					PodName:   podName,
-					Detail:    detail,
-					StartTime: startTime,
-				})
-				activeOnNode = true
+				// Only promote to active blocker if drain is stalled
+				if isDrainStalled != nil && isDrainStalled(nodeName) {
+					podName := firstMatchingPod(pdb, nodeName, pods)
+					activeKeys[key] = true
+
+					blockers = append(blockers, types.Blocker{
+						Type:      types.BlockerPDB,
+						Tier:      types.BlockerTierActive,
+						Name:      pdb.Name,
+						Namespace: pdb.Namespace,
+						NodeName:  nodeName,
+						PodName:   podName,
+						Detail:    detail,
+						StartTime: startTime,
+					})
+					activeOnNode = true
+				} else {
+					// Keep tracking the key so we preserve StartTime
+					activeKeys[key] = true
+				}
 			}
 		}
 

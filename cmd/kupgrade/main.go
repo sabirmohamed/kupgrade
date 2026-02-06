@@ -12,8 +12,11 @@ import (
 
 func init() {
 	// Silence client-go's klog output. During upgrades, informer watches
-	// drop and reconnect, producing warning logs that corrupt the TUI.
+	// drop and reconnect, producing warning/error logs that corrupt the TUI.
+	// Both settings are needed: SetOutput redirects the logger, but errors
+	// and warnings still go to stderr unless LogToStderr is disabled.
 	klog.SetOutput(io.Discard)
+	klog.LogToStderr(false)
 }
 
 func main() {

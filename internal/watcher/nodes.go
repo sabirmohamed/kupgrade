@@ -12,6 +12,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// DrainStallThreshold is how long a drain must be stalled before a PDB is
+// considered an active blocker. Transient PDB blocks (normal pacing) resolve
+// faster than this; persistent blocks (user intervention needed) exceed it.
+const DrainStallThreshold = 30 * time.Second
+
 // NodeWatcher watches node resources for upgrade-relevant changes
 type NodeWatcher struct {
 	informer              cache.SharedIndexInformer
@@ -21,6 +26,8 @@ type NodeWatcher struct {
 	evictablePodCounter   func(nodeName string) int  // Non-DaemonSet pods (for drain progress)
 	drainStartTimes       map[string]time.Time       // Track when each node started draining
 	initialEvictableCount map[string]int             // Evictable pod count when drain started
+	lastEvictableCount    map[string]int             // Last known evictable count (to detect evictions)
+	lastEvictionTime      map[string]time.Time       // When last eviction occurred per node
 	onStageChangeFunc     func()                     // Called when any node's stage changes
 	surgeMu               sync.RWMutex               // Guards reimagingNodes and surgeNodes
 	reimagingNodes        map[string]types.NodeState // Ghost nodes retained during reimage
@@ -37,6 +44,8 @@ func NewNodeWatcher(factory informers.SharedInformerFactory, emitter EventEmitte
 		evictablePodCounter:   evictablePodCounter,
 		drainStartTimes:       make(map[string]time.Time),
 		initialEvictableCount: make(map[string]int),
+		lastEvictableCount:    make(map[string]int),
+		lastEvictionTime:      make(map[string]time.Time),
 		reimagingNodes:        make(map[string]types.NodeState),
 		surgeNodes:            make(map[string]bool),
 	}
@@ -276,6 +285,8 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 	// Clean up drain tracking
 	delete(w.drainStartTimes, node.Name)
 	delete(w.initialEvictableCount, node.Name)
+	delete(w.lastEvictableCount, node.Name)
+	delete(w.lastEvictionTime, node.Name)
 
 	// Re-evaluate PDB blockers since draining set may have changed
 	if w.onStageChangeFunc != nil {
@@ -326,6 +337,13 @@ func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
 			drainStart = start
 			initialEvictable = w.initialEvictableCount[node.Name]
 
+			// Track eviction activity: if evictable count decreased, record the time
+			lastCount, hasLastCount := w.lastEvictableCount[node.Name]
+			if hasLastCount && evictableCount < lastCount {
+				w.lastEvictionTime[node.Name] = time.Now()
+			}
+			w.lastEvictableCount[node.Name] = evictableCount
+
 			// Correct stage based on actual drain activity:
 			// If evictable pods have been evicted (current < initial), we're DRAINING
 			if evictableCount < initialEvictable {
@@ -337,6 +355,8 @@ func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
 			initialEvictable = evictableCount
 			w.drainStartTimes[node.Name] = drainStart
 			w.initialEvictableCount[node.Name] = initialEvictable
+			w.lastEvictableCount[node.Name] = evictableCount
+			w.lastEvictionTime[node.Name] = drainStart // Assume drain just started
 			// Keep stage as CORDONED until evictable pods start decreasing
 		}
 
@@ -352,6 +372,8 @@ func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
 		// Node not cordoned - clear tracking if exists
 		delete(w.drainStartTimes, node.Name)
 		delete(w.initialEvictableCount, node.Name)
+		delete(w.lastEvictableCount, node.Name)
+		delete(w.lastEvictionTime, node.Name)
 	}
 
 	return types.NodeState{
@@ -481,6 +503,18 @@ func (w *NodeWatcher) isUpgradeActive() bool {
 	hasGhosts := len(w.reimagingNodes) > 0
 	w.surgeMu.RUnlock()
 	return hasGhosts
+}
+
+// IsDrainStalled returns true if the node is draining and no pods have been
+// evicted for longer than the threshold. This distinguishes real PDB blockers
+// (drain stuck) from transient PDB pacing (drain progressing normally).
+func (w *NodeWatcher) IsDrainStalled(nodeName string, threshold time.Duration) bool {
+	lastEviction, ok := w.lastEvictionTime[nodeName]
+	if !ok {
+		// Not tracking this node — not draining or just started
+		return false
+	}
+	return time.Since(lastEviction) > threshold
 }
 
 // MarkSurgeNode adds a node to the surge tracking set

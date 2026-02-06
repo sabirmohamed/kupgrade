@@ -130,6 +130,8 @@ func newNodeWatcher(emitter EventEmitter, stages StageComputer, storeObjects []i
 		evictablePodCounter:   func(string) int { return 0 },
 		drainStartTimes:       make(map[string]time.Time),
 		initialEvictableCount: make(map[string]int),
+		lastEvictableCount:    make(map[string]int),
+		lastEvictionTime:      make(map[string]time.Time),
 		reimagingNodes:        make(map[string]types.NodeState),
 		surgeNodes:            make(map[string]bool),
 	}

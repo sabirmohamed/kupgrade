@@ -18,6 +18,18 @@ const (
 	testNodeB     = "node-b"
 )
 
+// drainStalled returns a stall checker that reports all nodes as stalled.
+// Use this when testing active blocker scenarios.
+func drainStalled(nodeName string) bool {
+	return true
+}
+
+// drainProgressing returns a stall checker that reports all nodes as progressing.
+// Use this when testing that transient PDB blocks are NOT shown as active.
+func drainProgressing(nodeName string) bool {
+	return false
+}
+
 func newTestPDB(name, namespace string, disruptionsAllowed, expectedPods int32, matchLabels map[string]string) *policyv1.PodDisruptionBudget {
 	return &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
@@ -209,7 +221,8 @@ func TestBuildBlockers(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	blockers := w.BuildBlockers(drainingNodes, pods)
+	// With drain stalled, should show active blocker
+	blockers := w.BuildBlockers(drainingNodes, pods, drainStalled)
 
 	// Count by tier
 	var activeCount, riskCount int
@@ -256,7 +269,7 @@ func TestBuildBlockers_PDBBudgetRecovers(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	blockers := w.BuildBlockers([]string{testNodeA}, pods)
+	blockers := w.BuildBlockers([]string{testNodeA}, pods, drainStalled)
 	if len(blockers) != 0 {
 		t.Errorf("expected 0 blockers when PDB has budget, got %d", len(blockers))
 	}
@@ -279,7 +292,7 @@ func TestBuildBlockers_NoDrainingNodes(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	blockers := w.BuildBlockers(nil, pods)
+	blockers := w.BuildBlockers(nil, pods, drainStalled)
 	if len(blockers) != 1 {
 		t.Fatalf("expected 1 blocker, got %d", len(blockers))
 	}
@@ -306,7 +319,7 @@ func TestBuildBlockers_MultipleNodesBlocked(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	blockers := w.BuildBlockers([]string{testNodeA, testNodeB}, pods)
+	blockers := w.BuildBlockers([]string{testNodeA, testNodeB}, pods, drainStalled)
 
 	// Should produce 2 active blockers (one per draining node)
 	if len(blockers) != 2 {
@@ -349,7 +362,7 @@ func TestBuildBlockers_CordonedNodeTreatedAsBlockable(t *testing.T) {
 	// Simulate passing a cordoned node (not yet draining) as blockable.
 	// This is the scenario nodesBlockableByPDB covers — CORDONED nodes
 	// are included alongside DRAINING nodes.
-	blockers := w.BuildBlockers([]string{testNodeA}, pods)
+	blockers := w.BuildBlockers([]string{testNodeA}, pods, drainStalled)
 
 	if len(blockers) != 1 {
 		t.Fatalf("expected 1 blocker for cordoned node, got %d", len(blockers))
@@ -382,7 +395,7 @@ func TestBuildBlockers_StartTimePreservedAcrossCalls(t *testing.T) {
 	}
 
 	// First call sets StartTime
-	blockers1 := w.BuildBlockers([]string{testNodeA}, pods)
+	blockers1 := w.BuildBlockers([]string{testNodeA}, pods, drainStalled)
 	if len(blockers1) != 1 {
 		t.Fatalf("expected 1 blocker, got %d", len(blockers1))
 	}
@@ -393,12 +406,106 @@ func TestBuildBlockers_StartTimePreservedAcrossCalls(t *testing.T) {
 
 	// Second call should preserve the same StartTime
 	time.Sleep(10 * time.Millisecond)
-	blockers2 := w.BuildBlockers([]string{testNodeA}, pods)
+	blockers2 := w.BuildBlockers([]string{testNodeA}, pods, drainStalled)
 	if len(blockers2) != 1 {
 		t.Fatalf("expected 1 blocker, got %d", len(blockers2))
 	}
 	if !blockers2[0].StartTime.Equal(startTime) {
 		t.Errorf("StartTime changed across calls: %v → %v", startTime, blockers2[0].StartTime)
+	}
+}
+
+func TestBuildBlockers_DrainProgressingNoActiveBlocker(t *testing.T) {
+	// Key test: When drain is progressing (not stalled), PDB should NOT
+	// show as active blocker — only as risk. This prevents transient PDB
+	// pacing during normal drain from appearing as blockers.
+	appLabels := map[string]string{"app": "web"}
+
+	pdbStore := []interface{}{
+		newTestPDB("web-pdb", testNamespace, 0, 2, appLabels),
+	}
+
+	pods := []*corev1.Pod{
+		newTestPod("web-1", testNamespace, testNodeA, appLabels),
+	}
+
+	w := &PDBWatcher{
+		informer:          &fakeInformer{objects: pdbStore},
+		blockerStartTimes: make(map[string]time.Time),
+	}
+
+	// Drain is progressing (not stalled) — should show as risk only
+	blockers := w.BuildBlockers([]string{testNodeA}, pods, drainProgressing)
+
+	if len(blockers) != 1 {
+		t.Fatalf("expected 1 blocker (risk), got %d", len(blockers))
+	}
+	if blockers[0].Tier != types.BlockerTierRisk {
+		t.Errorf("expected risk tier when drain progressing, got %v", blockers[0].Tier)
+	}
+	if blockers[0].NodeName != "" {
+		t.Errorf("risk blocker should not have NodeName, got %q", blockers[0].NodeName)
+	}
+}
+
+func TestBuildBlockers_DrainStalledBecomesActiveBlocker(t *testing.T) {
+	// Test the transition: same PDB, same pods, but drain stall status changes
+	appLabels := map[string]string{"app": "web"}
+
+	pdbStore := []interface{}{
+		newTestPDB("web-pdb", testNamespace, 0, 2, appLabels),
+	}
+
+	pods := []*corev1.Pod{
+		newTestPod("web-1", testNamespace, testNodeA, appLabels),
+	}
+
+	w := &PDBWatcher{
+		informer:          &fakeInformer{objects: pdbStore},
+		blockerStartTimes: make(map[string]time.Time),
+	}
+
+	// First: drain progressing — only risk
+	blockers1 := w.BuildBlockers([]string{testNodeA}, pods, drainProgressing)
+	if len(blockers1) != 1 || blockers1[0].Tier != types.BlockerTierRisk {
+		t.Fatalf("expected 1 risk blocker when progressing, got %d with tier %v", len(blockers1), blockers1[0].Tier)
+	}
+
+	// Then: drain stalls — becomes active blocker
+	blockers2 := w.BuildBlockers([]string{testNodeA}, pods, drainStalled)
+	if len(blockers2) != 1 || blockers2[0].Tier != types.BlockerTierActive {
+		t.Fatalf("expected 1 active blocker when stalled, got %d with tier %v", len(blockers2), blockers2[0].Tier)
+	}
+	if blockers2[0].NodeName != testNodeA {
+		t.Errorf("active blocker should have NodeName %q, got %q", testNodeA, blockers2[0].NodeName)
+	}
+}
+
+func TestBuildBlockers_NilStallCheckerTreatsAsNotStalled(t *testing.T) {
+	// When isDrainStalled is nil, PDB should only show as risk (safe default)
+	appLabels := map[string]string{"app": "web"}
+
+	pdbStore := []interface{}{
+		newTestPDB("web-pdb", testNamespace, 0, 2, appLabels),
+	}
+
+	pods := []*corev1.Pod{
+		newTestPod("web-1", testNamespace, testNodeA, appLabels),
+	}
+
+	w := &PDBWatcher{
+		informer:          &fakeInformer{objects: pdbStore},
+		blockerStartTimes: make(map[string]time.Time),
+	}
+
+	// Nil stall checker — should show as risk only (safe default)
+	blockers := w.BuildBlockers([]string{testNodeA}, pods, nil)
+
+	if len(blockers) != 1 {
+		t.Fatalf("expected 1 blocker (risk), got %d", len(blockers))
+	}
+	if blockers[0].Tier != types.BlockerTierRisk {
+		t.Errorf("expected risk tier with nil stall checker, got %v", blockers[0].Tier)
 	}
 }
 

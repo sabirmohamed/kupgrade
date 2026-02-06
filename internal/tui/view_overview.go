@@ -97,14 +97,14 @@ func (m Model) formatOverviewBlockerLine(blocker types.Blocker, isActive bool) s
 		name = blocker.Namespace + "/" + blocker.Name
 	}
 
-	var nameStyle func(strs ...string) string
+	var lineStyle func(strs ...string) string
 	if isActive {
-		nameStyle = errorStyle.Render
+		lineStyle = errorStyle.Render
 	} else {
-		nameStyle = warningStyle.Render
+		lineStyle = warningStyle.Render
 	}
 
-	nameStr := fmt.Sprintf("%s %s", blocker.Type, nameStyle(name))
+	nameStr := fmt.Sprintf("%s %s", blocker.Type, lineStyle(name))
 
 	nodeStr := ""
 	if blocker.NodeName != "" {
@@ -122,7 +122,8 @@ func (m Model) formatOverviewBlockerLine(blocker types.Blocker, isActive bool) s
 		constraint = "disruption budget exhausted"
 	}
 
-	return fmt.Sprintf("%s    %s%s%s", nameStr, footerDescStyle.Render(constraint), nodeStr, errorStyle.Render(durationStr))
+	// Use appropriate color for duration: red for active, yellow for risks
+	return fmt.Sprintf("%s    %s%s%s", nameStr, footerDescStyle.Render(constraint), nodeStr, lineStyle(durationStr))
 }
 
 // renderDrainProgressSection shows drain progress for actively draining nodes

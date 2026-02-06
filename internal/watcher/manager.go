@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,10 @@ const (
 	nodeStateBufferSize = 50
 	podStateBufferSize  = 200
 	blockerBufferSize   = 50
+
+	// blockerRefreshInterval is how often to re-evaluate PDB blockers.
+	// This ensures stall detection updates even when no informer events fire.
+	blockerRefreshInterval = 5 * time.Second
 )
 
 // Compile-time interface checks
@@ -110,6 +115,24 @@ func (m *Manager) Start(ctx context.Context) error {
 			tracker.runCleanup(ctx)
 		}()
 	}
+
+	// Start periodic blocker refresh goroutine.
+	// This ensures stall detection updates even when no informer events fire,
+	// fixing the issue where blockers showed as "active" during progressing drains.
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ticker := time.NewTicker(blockerRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.CheckPDBBlockers()
+			}
+		}
+	}()
 
 	return nil
 }
@@ -231,7 +254,7 @@ func (m *Manager) InitialPodStates() []types.PodState {
 
 // InitialBlockers returns current blockers (for initial TUI load)
 func (m *Manager) InitialBlockers() []types.Blocker {
-	return m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods())
+	return m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods(), m.isDrainStalled)
 }
 
 // CheckPDBBlockers evaluates all PDBs against current cluster state and emits
@@ -242,7 +265,7 @@ func (m *Manager) CheckPDBBlockers() {
 	m.pdbMu.Lock()
 	defer m.pdbMu.Unlock()
 
-	blockers := m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods())
+	blockers := m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods(), m.isDrainStalled)
 
 	// Signal TUI to replace all PDB blockers with the fresh set
 	m.EmitBlocker(types.Blocker{
@@ -343,6 +366,12 @@ func (m *Manager) handleSurgeEvent(nodeName, poolName string, created bool) {
 // IsSurgeNode returns true if the named node is a tracked surge node
 func (m *Manager) IsSurgeNode(nodeName string) bool {
 	return m.nodeWatcher.IsSurgeNode(nodeName)
+}
+
+// isDrainStalled returns true if the node's drain has been stuck (no evictions
+// for DrainStallThreshold). Used to filter transient PDB blocks from active blockers.
+func (m *Manager) isDrainStalled(nodeName string) bool {
+	return m.nodeWatcher.IsDrainStalled(nodeName, DrainStallThreshold)
 }
 
 // WaitForCacheSync waits for all caches to sync
