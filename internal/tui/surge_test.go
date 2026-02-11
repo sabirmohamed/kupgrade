@@ -146,6 +146,81 @@ func TestHandleNodeUpdate_SurgeNode(t *testing.T) {
 	}
 }
 
+func TestHandleNodeUpdate_DisplaysWatcherStageAsIs(t *testing.T) {
+	m := newTestModel()
+
+	// TUI displays whatever stage the watcher sends — no local stage logic.
+	// Regression guard lives in the watcher (NodeWatcher.latchCompleteStage).
+	m.handleNodeUpdate(types.NodeState{
+		Name:    "node-1",
+		Stage:   types.StageComplete,
+		Version: "v1.33.2",
+		Ready:   true,
+	})
+	if m.nodes["node-1"].Stage != types.StageComplete {
+		t.Fatalf("expected COMPLETE, got %s", m.nodes["node-1"].Stage)
+	}
+
+	// If watcher sends a different stage, TUI displays it (watcher owns the latch)
+	m.handleNodeUpdate(types.NodeState{
+		Name:    "node-1",
+		Stage:   types.StageReady,
+		Version: "v1.33.2",
+		Ready:   true,
+	})
+	if m.nodes["node-1"].Stage != types.StageReady {
+		t.Errorf("TUI should display watcher stage, got %s", m.nodes["node-1"].Stage)
+	}
+}
+
+func TestHandleNodeUpdate_CompleteFieldsUpdated(t *testing.T) {
+	m := newTestModel()
+
+	// COMPLETE node with initial pod count
+	m.handleNodeUpdate(types.NodeState{
+		Name:     "node-1",
+		Stage:    types.StageComplete,
+		Version:  "v1.33.2",
+		PodCount: 10,
+	})
+	if m.nodes["node-1"].PodCount != 10 {
+		t.Fatalf("expected PodCount 10, got %d", m.nodes["node-1"].PodCount)
+	}
+
+	// Subsequent COMPLETE update with new pod count — fields should update
+	m.handleNodeUpdate(types.NodeState{
+		Name:     "node-1",
+		Stage:    types.StageComplete,
+		Version:  "v1.33.2",
+		PodCount: 15,
+	})
+	if m.nodes["node-1"].PodCount != 15 {
+		t.Errorf("expected PodCount 15 after update, got %d", m.nodes["node-1"].PodCount)
+	}
+}
+
+func TestHandleNodeUpdate_SurgeDeleteDoesNotReduceCompleteCount(t *testing.T) {
+	m := newTestModel()
+
+	// 3 real nodes COMPLETE + 1 surge node COMPLETE
+	m.handleNodeUpdate(types.NodeState{Name: "node-1", Stage: types.StageComplete, Version: "v1.33.2"})
+	m.handleNodeUpdate(types.NodeState{Name: "node-2", Stage: types.StageComplete, Version: "v1.33.2"})
+	m.handleNodeUpdate(types.NodeState{Name: "node-3", Stage: types.StageComplete, Version: "v1.33.2"})
+	m.handleNodeUpdate(types.NodeState{Name: "surge-1", Stage: types.StageComplete, Version: "v1.33.2", SurgeNode: true})
+
+	if m.stageCountExcludingSurge(types.StageComplete) != 3 {
+		t.Fatalf("expected 3 COMPLETE (non-surge), got %d", m.stageCountExcludingSurge(types.StageComplete))
+	}
+
+	// Surge node deleted
+	m.handleNodeUpdate(types.NodeState{Name: "surge-1", Deleted: true})
+
+	// Non-surge COMPLETE count should remain 3
+	if m.stageCountExcludingSurge(types.StageComplete) != 3 {
+		t.Errorf("COMPLETE count changed after surge deletion: got %d, want 3", m.stageCountExcludingSurge(types.StageComplete))
+	}
+}
+
 func TestHandleNodeUpdate_ReimagingGhostNode(t *testing.T) {
 	m := newTestModel()
 

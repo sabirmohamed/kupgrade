@@ -239,8 +239,8 @@ func (m Model) renderNodeList() string {
 	allNodes := m.getSortedNodeList()
 	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(allNodes))
 
-	// Header with hints
-	titleStr := fmt.Sprintf("NODES (%d)", len(allNodes))
+	// Header with hints — exclude surge nodes from count (they're temporary)
+	titleStr := fmt.Sprintf("NODES (%d)", m.totalNodes())
 	hints := footerDescStyle.Render("↑↓ navigate • d describe")
 	spacing := max(m.mainWidth()-len(titleStr)-20-4, 4)
 

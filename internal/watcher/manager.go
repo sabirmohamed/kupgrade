@@ -119,6 +119,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Start periodic blocker refresh goroutine.
 	// This ensures stall detection updates even when no informer events fire,
 	// fixing the issue where blockers showed as "active" during progressing drains.
+	// Also cleans up expired ghost nodes (orphaned reimaging entries).
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -130,6 +131,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				m.CheckPDBBlockers()
+				m.nodeWatcher.CleanupExpiredGhosts()
 			}
 		}
 	}()
@@ -209,16 +211,17 @@ func (m *Manager) EmitBlocker(blocker types.Blocker) {
 	}
 }
 
-// RefreshNodeState re-emits the current state of a node (called when pods change)
+// RefreshNodeState re-emits the current state of a node (called when pods change).
+// Delegates to NodeWatcher.RefreshState which applies drain tracking, lifecycle
+// flags (surge, COMPLETE latch), and emits the updated state.
 func (m *Manager) RefreshNodeState(nodeName string) {
-	// Find the node in the informer store
 	for _, obj := range m.nodeWatcher.informer.GetStore().List() {
 		node, ok := obj.(*corev1.Node)
 		if !ok {
 			continue
 		}
 		if node.Name == nodeName {
-			m.EmitNodeState(m.nodeWatcher.buildState(node))
+			m.nodeWatcher.RefreshState(node)
 			return
 		}
 	}
@@ -326,8 +329,9 @@ func (m *Manager) countPodsOnNode(nodeName string) int {
 	return count
 }
 
-// countEvictablePodsOnNode counts non-DaemonSet pods on a node (for drain progress).
+// countEvictablePodsOnNode counts non-DaemonSet, non-terminal pods on a node (for drain progress).
 // DaemonSet pods are ignored by `kubectl drain --ignore-daemonsets`.
+// Succeeded/Failed pods are terminal — kubectl drain skips them.
 func (m *Manager) countEvictablePodsOnNode(nodeName string) int {
 	count := 0
 	for _, obj := range m.podWatcher.informer.GetStore().List() {
@@ -335,9 +339,16 @@ func (m *Manager) countEvictablePodsOnNode(nodeName string) int {
 		if !ok {
 			continue
 		}
-		if pod.Spec.NodeName == nodeName && !isDaemonSetPod(pod) {
-			count++
+		if pod.Spec.NodeName != nodeName {
+			continue
 		}
+		if isDaemonSetPod(pod) {
+			continue
+		}
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		count++
 	}
 	return count
 }

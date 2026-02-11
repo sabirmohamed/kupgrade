@@ -30,9 +30,11 @@ debug.log
 
 #not committed
 project-context.md
+CLAUDE.md
 
 # BMAD framework
 _bmad/
 _bmad-output/
 .claude/commands/bmad/
 .claude/skills/
+scripts

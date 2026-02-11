@@ -18,6 +18,10 @@ type PodWatcher struct {
 	stages     StageComputer
 	migrations MigrationTracker
 	namespace  string
+	// lastEmittedEvent deduplicates pod events: podKey → last emitted event type.
+	// Safe without a mutex because client-go's sharedIndexInformer processes
+	// all event callbacks sequentially on a single goroutine.
+	lastEmittedEvent map[string]types.EventType
 }
 
 // NewPodWatcher creates a new pod watcher
@@ -25,11 +29,12 @@ func NewPodWatcher(factory informers.SharedInformerFactory, namespace string, em
 	informer := factory.Core().V1().Pods().Informer()
 
 	return &PodWatcher{
-		informer:   informer,
-		emitter:    emitter,
-		stages:     stages,
-		migrations: migrations,
-		namespace:  namespace,
+		informer:         informer,
+		emitter:          emitter,
+		stages:           stages,
+		migrations:       migrations,
+		namespace:        namespace,
+		lastEmittedEvent: make(map[string]types.EventType),
 	}
 }
 
@@ -48,7 +53,10 @@ func (w *PodWatcher) Start(ctx context.Context) error {
 }
 
 func (w *PodWatcher) onAdd(obj interface{}) {
-	pod := obj.(*corev1.Pod)
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return
+	}
 
 	// Filter by namespace if specified
 	if w.namespace != "" && pod.Namespace != w.namespace {
@@ -92,8 +100,14 @@ func (w *PodWatcher) onAdd(obj interface{}) {
 }
 
 func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
-	oldPod := oldObj.(*corev1.Pod)
-	newPod := newObj.(*corev1.Pod)
+	oldPod, ok := oldObj.(*corev1.Pod)
+	if !ok {
+		return
+	}
+	newPod, ok := newObj.(*corev1.Pod)
+	if !ok {
+		return
+	}
 
 	// Filter by namespace if specified
 	if w.namespace != "" && newPod.Namespace != w.namespace {
@@ -103,9 +117,30 @@ func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
 	// Emit pod state for TUI
 	w.emitter.EmitPodState(w.buildState(newPod))
 
+	podKey := newPod.Namespace + "/" + newPod.Name
+
+	// Clear dedup tracking when pod transitions away from the last emitted state.
+	// This allows legitimate cycles (e.g., Ready→NotReady→Ready) to emit again.
+	if lastEvent, ok := w.lastEmittedEvent[podKey]; ok {
+		switch lastEvent {
+		case types.EventPodReady:
+			if !isPodReady(newPod) {
+				delete(w.lastEmittedEvent, podKey)
+			}
+		case types.EventPodEvicted:
+			if newPod.Status.Reason != "Evicted" {
+				delete(w.lastEmittedEvent, podKey)
+			}
+		case types.EventPodFailed:
+			if newPod.Status.Phase != corev1.PodFailed {
+				delete(w.lastEmittedEvent, podKey)
+			}
+		}
+	}
+
 	// Check for eviction
 	if newPod.Status.Reason == "Evicted" && oldPod.Status.Reason != "Evicted" {
-		w.emitter.Emit(types.Event{
+		w.emitTransition(podKey, types.Event{
 			Type:      types.EventPodEvicted,
 			Severity:  types.SeverityWarning,
 			Timestamp: time.Now(),
@@ -120,7 +155,7 @@ func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
 	oldReady := isPodReady(oldPod)
 	newReady := isPodReady(newPod)
 	if !oldReady && newReady {
-		w.emitter.Emit(types.Event{
+		w.emitTransition(podKey, types.Event{
 			Type:      types.EventPodReady,
 			Severity:  types.SeverityInfo,
 			Timestamp: time.Now(),
@@ -133,7 +168,7 @@ func (w *PodWatcher) onUpdate(oldObj, newObj interface{}) {
 
 	// Check for Failed phase
 	if newPod.Status.Phase == corev1.PodFailed && oldPod.Status.Phase != corev1.PodFailed {
-		w.emitter.Emit(types.Event{
+		w.emitTransition(podKey, types.Event{
 			Type:      types.EventPodFailed,
 			Severity:  types.SeverityError,
 			Timestamp: time.Now(),
@@ -188,6 +223,9 @@ func (w *PodWatcher) onDelete(obj interface{}) {
 	// Track for potential migration
 	w.migrations.OnPodDelete(pod)
 
+	// Clean up dedup tracking for deleted pod
+	w.clearLastEmitted(pod.Namespace + "/" + pod.Name)
+
 	// Emit deleted pod state for TUI
 	w.emitter.EmitPodState(types.PodState{
 		Name:      pod.Name,
@@ -205,6 +243,21 @@ func (w *PodWatcher) onDelete(obj interface{}) {
 		PodName:   pod.Name,
 		Namespace: pod.Namespace,
 	})
+}
+
+// emitTransition emits an event for a pod state transition, deduplicating
+// repeated emissions of the same event type for the same pod.
+func (w *PodWatcher) emitTransition(podKey string, event types.Event) {
+	if w.lastEmittedEvent[podKey] == event.Type {
+		return
+	}
+	w.lastEmittedEvent[podKey] = event.Type
+	w.emitter.Emit(event)
+}
+
+// clearLastEmitted removes the dedup tracking for a deleted pod.
+func (w *PodWatcher) clearLastEmitted(podKey string) {
+	delete(w.lastEmittedEvent, podKey)
 }
 
 // isPodReady checks if pod has Ready condition True
@@ -286,7 +339,10 @@ func computePodStatus(pod *corev1.Pod) string {
 func (w *PodWatcher) buildPodStates() []types.PodState {
 	var states []types.PodState
 	for _, obj := range w.informer.GetStore().List() {
-		pod := obj.(*corev1.Pod)
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			continue
+		}
 		if w.namespace != "" && pod.Namespace != w.namespace {
 			continue
 		}
