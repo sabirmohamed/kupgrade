@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -34,7 +36,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.detailViewport.SetContent("Error: " + msg.Err.Error())
 		} else {
-			m.detailViewport.SetContent(msg.Content)
+			m.detailViewport.SetContent(colorizeDescribe(msg.Content))
 		}
 		m.detailViewport.GotoTop()
 		return m, nil
@@ -61,6 +63,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+
+	case NodeMetricsMsg:
+		for name, metrics := range msg {
+			if node, ok := m.nodes[name]; ok {
+				node.CPUPercent = metrics.CPUPercent
+				node.MemPercent = metrics.MemPercent
+				m.nodes[name] = node
+			}
+		}
+		return m, scheduleMetricsRefresh()
+
+	case metricsRefreshMsg:
+		return m, fetchNodeMetrics(m.config.Clientset)
+
+	case cpVersionMsg:
+		if msg.Version != "" {
+			m.controlPlaneVersion = msg.Version
+			if m.initialCPVersion == "" {
+				m.initialCPVersion = msg.Version
+			}
+			if versionCore(m.controlPlaneVersion) != versionCore(m.initialCPVersion) {
+				m.cpUpgraded = true
+			}
+		}
+		return m, scheduleCPVersionCheck()
+
+	case cpVersionCheckMsg:
+		return m, fetchControlPlaneVersion(m.config.Clientset)
 
 	case TickMsg:
 		m.currentTime = time.Now()
@@ -108,7 +138,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 
-	// Screen navigation (0-6)
+	// Screen navigation (0-4)
 	if screen := screenFromKey(msg); screen >= 0 {
 		m.screen = screen
 		m.listIndex = 0 // Reset list position on screen change
@@ -126,8 +156,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleDrainsKey(msg)
 	case ScreenPods:
 		return m.handlePodsKey(msg)
-	case ScreenBlockers:
-		return m.handleBlockersKey(msg)
 	case ScreenEvents:
 		return m.handleEventsKey(msg)
 	}
@@ -259,17 +287,11 @@ func (m *Model) handlePodsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
 		podList := m.getDisplayPodList()
-		if m.listIndex < len(podList) {
-			pod := podList[m.listIndex]
+		if pod := m.podAtRow(podList, m.listIndex); pod != nil {
 			podKey := pod.Namespace + "/" + pod.Name
 			cmd := m.openDetail(DetailPod, podKey)
 			return *m, cmd
 		}
-		return *m, nil
-	}
-	if key.Matches(msg, m.keys.PodFilter) {
-		m.cyclePodFilter()
-		m.listIndex = 0
 		return *m, nil
 	}
 	if key.Matches(msg, m.keys.PodSearch) {
@@ -315,7 +337,7 @@ func (m *Model) handlePodSearchKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 
 	case tea.KeyPgUp, tea.KeyCtrlU:
-		pageSize := m.height - 10
+		pageSize := m.height - 12
 		if pageSize < 5 {
 			pageSize = 5
 		}
@@ -326,7 +348,7 @@ func (m *Model) handlePodSearchKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return *m, nil
 
 	case tea.KeyPgDown, tea.KeyCtrlD:
-		pageSize := m.height - 10
+		pageSize := m.height - 12
 		if pageSize < 5 {
 			pageSize = 5
 		}
@@ -350,88 +372,68 @@ func (m *Model) handlePodSearchKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return *m, cmd
 }
 
-// displayPodCount returns count of pods after both stage filter and fuzzy search
+// displayPodCount returns count of table rows (including section separators)
+// after both stage filter and fuzzy search
 func (m *Model) displayPodCount() int {
-	return len(m.getDisplayPodList())
-}
-
-func (m *Model) handleBlockersKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Enter/d on a blocker opens the associated node detail
-	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
-		if m.listIndex < len(m.blockers) {
-			blocker := m.blockers[m.listIndex]
-			if blocker.NodeName != "" {
-				cmd := m.openDetail(DetailNode, blocker.NodeName)
-				return *m, cmd
-			}
-		}
-		return *m, nil
-	}
-	return m.handleListNavigation(msg, len(m.blockers))
+	podList := m.getDisplayPodList()
+	return m.podRowCount(podList)
 }
 
 func (m *Model) handleEventsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Enter/d opens event detail overlay
+	events := m.sortedEvents()
+	aggregated := aggregateEvents(events)
+
+	// Enter/d opens detail overlay for the selected row
 	if key.Matches(msg, m.keys.Enter) || key.Matches(msg, m.keys.Describe) {
-		events := m.filteredEvents()
-		if m.listIndex < len(events) {
-			cmd := m.openDetail(DetailEvent, eventKey(events[m.listIndex]))
+		groupIdx, isSubRow := m.eventGroupForVisualRow(m.listIndex, aggregated, events)
+		if groupIdx < len(aggregated) {
+			var event types.Event
+			if isSubRow {
+				// Find the specific sub-event for this visual row
+				event = m.eventAtVisualRow(m.listIndex, aggregated, events)
+			} else {
+				event = aggregated[groupIdx].SampleEvent
+			}
+			// K8s events: use namespace/eventName for kubectl describe
+			// Internal events: use timestamp:message for in-memory lookup
+			detailKey := eventKey(event)
+			if event.EventName != "" {
+				detailKey = event.Namespace + "/" + event.EventName
+			}
+			cmd := m.openDetail(DetailEvent, detailKey)
 			return *m, cmd
 		}
 		return *m, nil
 	}
 
-	// Event filter toggles (close detail overlay since filtered list changes)
-	if key.Matches(msg, m.keys.EventUpgrade) {
-		m.eventFilter = EventFilterUpgrade
-		m.listIndex = 0
-		m.overlay = OverlayNone
-		return *m, nil
-	}
-	if key.Matches(msg, m.keys.EventWarnings) {
-		m.eventFilter = EventFilterWarnings
-		m.listIndex = 0
-		m.overlay = OverlayNone
-		return *m, nil
-	}
-	if key.Matches(msg, m.keys.EventAll) {
-		m.eventFilter = EventFilterAll
-		m.listIndex = 0
-		m.overlay = OverlayNone
-		return *m, nil
-	}
-	// Aggregation toggle (g key — intentionally shadows Top binding on events screen)
-	if key.Matches(msg, m.keys.EventAggregate) {
-		m.eventAggregated = !m.eventAggregated
-		m.expandedGroup = ""
-		m.listIndex = 0
-		return *m, nil
-	}
-	// Expand/collapse group (only in aggregated view)
-	if key.Matches(msg, m.keys.EventExpand) && m.eventAggregated {
-		aggregated := aggregateEvents(m.filteredEvents())
-		if m.listIndex < len(aggregated) {
-			selectedReason := aggregated[m.listIndex].Reason
+	// Expand/collapse aggregated group
+	if key.Matches(msg, m.keys.EventExpand) {
+		groupIdx, _ := m.eventGroupForVisualRow(m.listIndex, aggregated, events)
+		if groupIdx < len(aggregated) {
+			selectedReason := aggregated[groupIdx].Reason
 			if m.expandedGroup == selectedReason {
+				// Collapsing: snap cursor to the group header
 				m.expandedGroup = ""
+				m.listIndex = eventGroupHeaderRow(groupIdx, aggregated, events, "")
 			} else {
+				// Expanding: cursor stays on group header
+				headerRow := eventGroupHeaderRow(groupIdx, aggregated, events, m.expandedGroup)
 				m.expandedGroup = selectedReason
+				// Recompute header position after expansion changes row layout
+				m.listIndex = eventGroupHeaderRow(groupIdx, aggregated, events, m.expandedGroup)
+				_ = headerRow // suppress unused
 			}
 		}
 		return *m, nil
 	}
 
-	itemCount := len(m.filteredEvents())
-	if m.eventAggregated {
-		itemCount = len(aggregateEvents(m.filteredEvents()))
-	}
-
+	itemCount := m.eventVisualRowCount()
 	return m.handleListNavigation(msg, itemCount)
 }
 
 // handleListNavigation provides common up/down/g/G/pgup/pgdown navigation for non-table list screens
 func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.Cmd) {
-	pageSize := m.height - 10
+	pageSize := m.height - 12
 	if pageSize < 5 {
 		pageSize = 5
 	}
@@ -491,10 +493,17 @@ func (m *Model) handleListNavigation(msg tea.KeyMsg, itemCount int) (Model, tea.
 // handleNodeUpdate stores node state from watcher
 func (m *Model) handleNodeUpdate(node types.NodeState) {
 	if node.Deleted {
-		delete(m.nodes, node.Name)
-		// Clamp listIndex to avoid out-of-bounds after deletion
-		if count := len(m.nodes); m.listIndex >= count && count > 0 {
-			m.listIndex = count - 1
+		if node.Stage == types.StageComplete {
+			// EKS/GKE: keep deleted-complete nodes for progress tracking.
+			// totalNodes() counts them (non-surge, in map), completedNodes()
+			// counts them (COMPLETE stage), so progress goes 33% → 67% → 100%.
+			m.nodes[node.Name] = node
+		} else {
+			delete(m.nodes, node.Name)
+			// Clamp listIndex to avoid out-of-bounds after deletion
+			if count := len(m.nodes); m.listIndex >= count && count > 0 {
+				m.listIndex = count - 1
+			}
 		}
 	} else {
 		m.nodes[node.Name] = node
@@ -627,7 +636,7 @@ func (m *Model) handleEvent(e types.Event) {
 // handleMouse handles mouse events for scrolling
 func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 	switch m.screen {
-	case ScreenNodes, ScreenDrains, ScreenPods, ScreenBlockers, ScreenEvents:
+	case ScreenNodes, ScreenDrains, ScreenPods, ScreenEvents:
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			if m.listIndex > 0 {
@@ -685,6 +694,8 @@ func (m Model) fetchDescribe() tea.Cmd {
 			}
 			d := &describe.PodDescriber{Interface: clientset}
 			output, err = d.Describe(parts[0], parts[1], settings)
+		case DetailEvent:
+			output, err = describeEventExec(key)
 		default:
 			return DescribeMsg{Err: fmt.Errorf("unsupported detail type")}
 		}
@@ -696,6 +707,25 @@ func (m Model) fetchDescribe() tea.Cmd {
 	}
 }
 
+// describeEventExec calls kubectl describe event for the given namespace/name key.
+// Uses os/exec because the kubectl library has no EventDescriber.
+func describeEventExec(key string) (string, error) {
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid event key: %s", key)
+	}
+	namespace, name := parts[0], parts[1]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "kubectl", "describe", "event", name, "-n", namespace).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("kubectl describe event: %w\n%s", err, string(out))
+	}
+	return string(out), nil
+}
+
 // currentListCount returns the item count for the current list screen
 func (m *Model) currentListCount() int {
 	switch m.screen {
@@ -705,10 +735,8 @@ func (m *Model) currentListCount() int {
 		return len(m.getDrainNodes())
 	case ScreenPods:
 		return m.displayPodCount()
-	case ScreenBlockers:
-		return len(m.blockers)
 	case ScreenEvents:
-		return len(m.events)
+		return m.eventVisualRowCount()
 	default:
 		return 0
 	}

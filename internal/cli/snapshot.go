@@ -74,5 +74,23 @@ func runSnapshot(ctx context.Context, configFlags *genericclioptions.ConfigFlags
 	fmt.Printf("  %d workloads, %d nodes, %d PDBs across %d namespaces\n",
 		len(snap.Workloads), len(snap.Nodes), len(snap.PDBs), len(namespaces))
 
+	// Warn about PDBs that will block drains
+	var blockingPDBs []string
+	for _, pdb := range snap.PDBs {
+		if pdb.WillBlockDrain {
+			detail := pdb.Namespace + "/" + pdb.Name
+			if pdb.MinAvailable != "" {
+				detail += fmt.Sprintf(" (minAvailable=%s, %d/%d healthy)", pdb.MinAvailable, pdb.CurrentHealthy, pdb.ExpectedPods)
+			}
+			blockingPDBs = append(blockingPDBs, detail)
+		}
+	}
+	if len(blockingPDBs) > 0 {
+		fmt.Fprintf(os.Stderr, "  warning: %d PDB(s) will block drain:\n", len(blockingPDBs))
+		for _, pdb := range blockingPDBs {
+			fmt.Fprintf(os.Stderr, "    → %s\n", pdb)
+		}
+	}
+
 	return nil
 }

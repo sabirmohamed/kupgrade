@@ -53,8 +53,7 @@ func TestScreenNavigation(t *testing.T) {
 		{"1", ScreenNodes},
 		{"2", ScreenDrains},
 		{"3", ScreenPods},
-		{"4", ScreenBlockers},
-		{"5", ScreenEvents},
+		{"4", ScreenEvents},
 		{"0", ScreenOverview},
 	}
 
@@ -119,7 +118,7 @@ func TestQuitFromNonOverviewReturnsToOverview(t *testing.T) {
 	m := New(Config{EventCh: eventCh, NodeStateCh: nodeCh, PodStateCh: podCh, BlockerCh: blockerCh})
 
 	// Navigate to Events screen
-	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")}
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")}
 	newModel, _ := m.Update(msg)
 	m = newModel.(Model)
 
@@ -199,7 +198,6 @@ func TestScreenName(t *testing.T) {
 		{ScreenNodes, "NODES"},
 		{ScreenDrains, "DRAINS"},
 		{ScreenPods, "PODS"},
-		{ScreenBlockers, "BLOCKERS"},
 		{ScreenEvents, "EVENTS"},
 	}
 

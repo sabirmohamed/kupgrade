@@ -157,6 +157,9 @@ func Diff(before, after *types.Snapshot) *DiffReport {
 	// Diff nodes.
 	report.NodeDiffs = diffNodes(before.Nodes, after.Nodes)
 
+	// Diff PDBs.
+	report.PDBDiffs = diffPDBs(before.PDBs, after.PDBs)
+
 	// Build summary.
 	report.Summary = buildSummary(report.WorkloadDiffs, report.NodeDiffs)
 	report.HasNewIssues = report.Summary.NewIssues > 0
@@ -280,6 +283,64 @@ func diffConditions(before, after []string) []string {
 
 	sort.Strings(changes)
 	return changes
+}
+
+func diffPDBs(before, after []types.PDBSnapshot) []PDBDiff {
+	afterMap := make(map[string]*types.PDBSnapshot, len(after))
+	for i := range after {
+		key := after[i].Namespace + "/" + after[i].Name
+		afterMap[key] = &after[i]
+	}
+
+	beforeMap := make(map[string]*types.PDBSnapshot, len(before))
+	for i := range before {
+		key := before[i].Namespace + "/" + before[i].Name
+		beforeMap[key] = &before[i]
+	}
+
+	var diffs []PDBDiff
+
+	// Any PDB that currently will block drain gets reported — regardless
+	// of whether it existed at snapshot time. The report must surface all
+	// current blockers so the user knows what will stall their next upgrade.
+	for key, afterPDB := range afterMap {
+		if afterPDB.WillBlockDrain {
+			beforePDB := beforeMap[key]
+			diffs = append(diffs, PDBDiff{
+				Name:      afterPDB.Name,
+				Namespace: afterPDB.Namespace,
+				Category:  PDBWillBlock,
+				Before:    beforePDB,
+				After:     afterPDB,
+			})
+		}
+	}
+
+	// Check before PDBs that were blocking but are now resolved
+	for key, beforePDB := range beforeMap {
+		if !beforePDB.WillBlockDrain {
+			continue
+		}
+		afterPDB, exists := afterMap[key]
+		if !exists || !afterPDB.WillBlockDrain {
+			diffs = append(diffs, PDBDiff{
+				Name:      beforePDB.Name,
+				Namespace: beforePDB.Namespace,
+				Category:  PDBResolved,
+				Before:    beforePDB,
+				After:     afterPDB,
+			})
+		}
+	}
+
+	sort.Slice(diffs, func(i, j int) bool {
+		if diffs[i].Category != diffs[j].Category {
+			return diffs[i].Category < diffs[j].Category
+		}
+		return diffs[i].Namespace+"/"+diffs[i].Name < diffs[j].Namespace+"/"+diffs[j].Name
+	})
+
+	return diffs
 }
 
 func buildSummary(workloadDiffs []WorkloadDiff, nodeDiffs []NodeDiff) DiffSummary {

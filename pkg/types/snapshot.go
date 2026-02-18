@@ -41,7 +41,11 @@ type WorkloadSnapshot struct {
 type PDBSnapshot struct {
 	Name               string `json:"name"`
 	Namespace          string `json:"namespace"`
+	MinAvailable       string `json:"minAvailable,omitempty"`
+	MaxUnavailable     string `json:"maxUnavailable,omitempty"`
 	DisruptionsAllowed int32  `json:"disruptionsAllowed"`
 	CurrentHealthy     int32  `json:"currentHealthy"`
+	DesiredHealthy     int32  `json:"desiredHealthy"`
 	ExpectedPods       int32  `json:"expectedPods"`
+	WillBlockDrain     bool   `json:"willBlockDrain"` // DesiredHealthy >= ExpectedPods
 }

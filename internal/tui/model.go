@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"github.com/sabirmohamed/kupgrade/internal/kube"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 	"golang.org/x/mod/semver"
 	"k8s.io/client-go/kubernetes"
@@ -23,26 +26,32 @@ const (
 	maxMigrations = 50
 )
 
-// Screen represents the main navigation screens (0-6)
+// Screen represents the main navigation screens (0-4)
 type Screen int
 
 const (
-	ScreenOverview Screen = iota // 0 - Pipeline stages with node cards
-	ScreenNodes                  // 1 - Full node details, conditions, taints
-	ScreenDrains                 // 2 - Eviction progress per node
-	ScreenPods                   // 3 - Pod health, probes, phase by node
-	ScreenBlockers               // 4 - PDBs, local storage, stuck evictions
-	ScreenEvents                 // 5 - Full event log with filtering
+	ScreenOverview Screen = iota // 0 - Dashboard with pills, pools, active nodes
+	ScreenNodes                  // 1 - Full node details, conditions
+	ScreenDrains                 // 2 - Eviction progress + blockers
+	ScreenPods                   // 3 - Pod health, phase by node
+	ScreenEvents                 // 4 - Full event log with filtering
 )
 
-// PodFilterMode controls which pods are shown in the PODS screen
-type PodFilterMode int
+// PodPriority determines which section a pod belongs to
+type PodPriority int
 
 const (
-	PodFilterDisrupting  PodFilterMode = iota // Pods on CORDONED/DRAINING/REIMAGING nodes (default)
-	PodFilterRescheduled                      // Pods on COMPLETE nodes (did they land safely?)
-	PodFilterAll                              // All pods
+	PodPriorityAttention PodPriority = iota // Red — needs action
+	PodPriorityDisrupted                    // Orange — moved, verify healthy
+	PodPriorityHealthy                      // Green — unaffected
+	PodPrioritySeparator PodPriority = -1   // Sentinel for section separator rows
 )
+
+// classifiedPod holds a pod with its computed priority
+type classifiedPod struct {
+	Pod      types.PodState
+	Priority PodPriority
+}
 
 // Overlay represents modal overlays on top of screens
 type Overlay int
@@ -63,28 +72,21 @@ const (
 	DetailEvent
 )
 
-// EventFilter represents the event filtering mode
-type EventFilter int
-
-const (
-	EventFilterUpgrade  EventFilter = iota // Upgrade-related events only (default)
-	EventFilterWarnings                    // Warning and Error events only
-	EventFilterAll                         // All events
-)
-
 // Config holds TUI configuration
 type Config struct {
-	Context         string
-	ServerVersion   string
-	TargetVersion   string
-	InitialNodes    []types.NodeState
-	InitialPods     []types.PodState
-	InitialBlockers []types.Blocker
-	EventCh         <-chan types.Event
-	NodeStateCh     <-chan types.NodeState
-	PodStateCh      <-chan types.PodState
-	BlockerCh       <-chan types.Blocker
-	Clientset       kubernetes.Interface
+	Context             string
+	ServerVersion       string
+	TargetVersion       string
+	ControlPlaneVersion string // Actual API server version at startup
+	InitialNodes        []types.NodeState
+	InitialPods         []types.PodState
+	InitialBlockers     []types.Blocker
+	PreFlightBlockers   []types.Blocker // PDBs that will block drains (structural misconfiguration)
+	EventCh             <-chan types.Event
+	NodeStateCh         <-chan types.NodeState
+	PodStateCh          <-chan types.PodState
+	BlockerCh           <-chan types.Blocker
+	Clientset           kubernetes.Interface
 }
 
 // Model is the TUI state
@@ -97,29 +99,37 @@ type Model struct {
 	height int
 
 	// Navigation state
-	screen          Screen        // Current screen (0-6)
-	overlay         Overlay       // Modal overlay (none, help, detail)
-	selectedStage   int           // For Overview screen
-	selectedNode    int           // For Overview screen
-	listIndex       int           // For list-based screens (Overview node list, Events, Blockers)
-	eventFilter     EventFilter   // Event filtering mode (upgrade/warnings/all)
-	eventAggregated bool          // Whether to show aggregated events
-	expandedGroup   string        // Currently expanded event group (reason)
-	podFilterMode   PodFilterMode // Pod view filter mode (disrupting/rescheduled/all)
-	podSearchActive bool          // Whether fuzzy search input is active
+	screen          Screen  // Current screen (0-4)
+	overlay         Overlay // Modal overlay (none, help, detail)
+	selectedStage   int     // For Overview screen
+	selectedNode    int     // For Overview screen
+	listIndex       int     // For list-based screens (Overview node list, Events, Blockers)
+	expandedGroup   string  // Currently expanded event group (reason)
+	podSearchActive bool    // Whether fuzzy search input is active
 	podSearchInput  textinput.Model
 
 	// Data (display only - no computation)
-	nodes        map[string]types.NodeState
-	nodesByStage map[types.NodeStage][]string
-	pods         map[string]types.PodState // key: namespace/name
-	events       []types.Event
-	migrations   []types.Migration
-	blockers     []types.Blocker
+	nodes             map[string]types.NodeState
+	nodesByStage      map[types.NodeStage][]string
+	nodesByPool       map[string][]string       // pool name → node names
+	pods              map[string]types.PodState // key: namespace/name
+	events            []types.Event
+	migrations        []types.Migration
+	blockers          []types.Blocker
+	preFlightBlockers []types.Blocker // PDBs that will block drains (structural)
+
+	// Platform + timing
+	platform         string    // "AKS", "EKS", "GKE", or ""
+	upgradeStartTime time.Time // Set when first non-READY node appears
 
 	// Cached version range (recomputed on NodeUpdateMsg, not render-time)
 	lowestVersion  string // Current lowest version across all nodes
 	highestVersion string // Current highest version across all nodes
+
+	// Control plane version (polled from API server)
+	controlPlaneVersion string // Current API server version (polled every 30s)
+	initialCPVersion    string // Captured at startup (to detect CP upgrade)
+	cpUpgraded          bool   // True when CP version changed from initial
 
 	// Detail overlay state
 	detailViewport viewport.Model
@@ -127,10 +137,9 @@ type Model struct {
 	detailKey      string // node name, "ns/pod", or event composite key
 
 	// Bubbles components
-	spinner   spinner.Model
-	progress  progress.Model
-	smallProg progress.Model // Compact progress bar for cards/drains
-	help      help.Model
+	spinner  spinner.Model
+	progress progress.Model
+	help     help.Model
 
 	// Animation
 	currentTime time.Time
@@ -160,14 +169,6 @@ func New(cfg Config) Model {
 		progress.WithWidth(headerProgressBarWidth),
 	)
 
-	// Small progress bar (cards/drains)
-	smallProg := progress.New(
-		progress.WithSolidFill(string(colorComplete)),
-		progress.WithoutPercentage(),
-		progress.WithFillCharacters('█', '░'),
-		progress.WithWidth(12),
-	)
-
 	// Help
 	h := help.New()
 	h.Styles.ShortKey = footerKeyStyle
@@ -192,6 +193,7 @@ func New(cfg Config) Model {
 		detailViewport: vp,
 		nodes:          make(map[string]types.NodeState),
 		nodesByStage:   make(map[types.NodeStage][]string),
+		nodesByPool:    make(map[string][]string),
 		pods:           make(map[string]types.PodState),
 		events:         make([]types.Event, 0, maxEvents),
 		migrations:     make([]types.Migration, 0, maxMigrations),
@@ -200,8 +202,13 @@ func New(cfg Config) Model {
 		podSearchInput: ti,
 		spinner:        sp,
 		progress:       prog,
-		smallProg:      smallProg,
 		help:           h,
+	}
+
+	// Set initial control plane version
+	if cfg.ControlPlaneVersion != "" {
+		m.controlPlaneVersion = cfg.ControlPlaneVersion
+		m.initialCPVersion = cfg.ControlPlaneVersion
 	}
 
 	// Load initial nodes
@@ -218,19 +225,27 @@ func New(cfg Config) Model {
 
 	// Load initial blockers
 	m.blockers = append(m.blockers, cfg.InitialBlockers...)
+	m.preFlightBlockers = cfg.PreFlightBlockers
 
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		waitForEvent(m.config.EventCh),
 		waitForNodeState(m.config.NodeStateCh),
 		waitForPodState(m.config.PodStateCh),
 		waitForBlocker(m.config.BlockerCh),
 		tick(),
 		m.spinner.Tick,
-	)
+	}
+	if cmd := fetchNodeMetrics(m.config.Clientset); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := fetchControlPlaneVersion(m.config.Clientset); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
 }
 
 func waitForEvent(ch <-chan types.Event) tea.Cmd {
@@ -279,6 +294,52 @@ func tick() tea.Cmd {
 	})
 }
 
+const metricsRefreshInterval = 30 * time.Second
+
+// fetchNodeMetrics returns a tea.Cmd that fetches CPU/Memory metrics from the metrics-server.
+// Returns nil when clientset is unavailable (e.g., smoke tests).
+func fetchNodeMetrics(clientset kubernetes.Interface) tea.Cmd {
+	if clientset == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return NodeMetricsMsg(kube.FetchNodeMetrics(ctx, clientset))
+	}
+}
+
+// scheduleMetricsRefresh returns a tea.Cmd that triggers the next metrics fetch after the interval.
+func scheduleMetricsRefresh() tea.Cmd {
+	return tea.Tick(metricsRefreshInterval, func(t time.Time) tea.Msg {
+		return metricsRefreshMsg{}
+	})
+}
+
+const cpVersionPollInterval = 30 * time.Second
+
+// fetchControlPlaneVersion returns a tea.Cmd that fetches the API server version.
+// Returns nil when clientset is unavailable (e.g., smoke tests).
+func fetchControlPlaneVersion(clientset kubernetes.Interface) tea.Cmd {
+	if clientset == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		info, err := clientset.Discovery().ServerVersion()
+		if err != nil {
+			return cpVersionMsg{} // Empty version — keeps poll cycle alive
+		}
+		return cpVersionMsg{Version: info.GitVersion}
+	}
+}
+
+// scheduleCPVersionCheck returns a tea.Cmd that triggers the next CP version poll after the interval.
+func scheduleCPVersionCheck() tea.Cmd {
+	return tea.Tick(cpVersionPollInterval, func(t time.Time) tea.Msg {
+		return cpVersionCheckMsg{}
+	})
+}
+
 // Helper accessors
 
 func (m Model) contextName() string { return m.config.Context }
@@ -312,8 +373,6 @@ func (m Model) screenName() string {
 		return "DRAINS"
 	case ScreenPods:
 		return "PODS"
-	case ScreenBlockers:
-		return "BLOCKERS"
 	case ScreenEvents:
 		return "EVENTS"
 	default:
@@ -368,8 +427,32 @@ func (m *Model) getSortedNodeList() []string {
 
 func (m *Model) rebuildNodesByStage() {
 	m.nodesByStage = make(map[types.NodeStage][]string)
+	m.nodesByPool = make(map[string][]string)
 	for name, node := range m.nodes {
 		m.nodesByStage[node.Stage] = append(m.nodesByStage[node.Stage], name)
+		if node.Pool != "" {
+			m.nodesByPool[node.Pool] = append(m.nodesByPool[node.Pool], name)
+		}
+	}
+
+	// Track upgrade start: set when first non-READY, non-COMPLETE node appears
+	if m.upgradeStartTime.IsZero() {
+		for _, stage := range []types.NodeStage{types.StageCordoned, types.StageDraining, types.StageReimaging} {
+			if len(m.nodesByStage[stage]) > 0 {
+				m.upgradeStartTime = time.Now()
+				break
+			}
+		}
+	}
+
+	// Detect platform once from providerID
+	if m.platform == "" {
+		for _, node := range m.nodes {
+			if node.ProviderID != "" {
+				m.platform = detectPlatform(node.ProviderID)
+				break
+			}
+		}
 	}
 }
 
@@ -406,6 +489,29 @@ func versionCore(v string) string {
 	return c
 }
 
+// elapsedDisplay returns the upgrade elapsed time as "Xm Ys" or "" if not started
+func (m *Model) elapsedDisplay() string {
+	if m.upgradeStartTime.IsZero() {
+		return ""
+	}
+	d := m.currentTime.Sub(m.upgradeStartTime)
+	mins := int(d.Minutes())
+	secs := int(d.Seconds()) % 60
+	if mins > 0 {
+		return fmt.Sprintf("%dm %ds", mins, secs)
+	}
+	return fmt.Sprintf("%ds", secs)
+}
+
+// stageCounts returns a map of stage name → count (excluding surge nodes)
+func (m *Model) stageCounts() map[string]int {
+	counts := make(map[string]int)
+	for _, stage := range types.AllStages() {
+		counts[string(stage)] = m.stageCountExcludingSurge(stage)
+	}
+	return counts
+}
+
 func (m *Model) totalNodes() int {
 	count := 0
 	for _, node := range m.nodes {
@@ -434,87 +540,34 @@ func (m *Model) progressPercent() int {
 	return (m.completedNodes() * 100) / total
 }
 
-// cyclePodFilter advances the pod filter mode: AFFECTED → SETTLED → ALL → AFFECTED
-func (m *Model) cyclePodFilter() {
-	switch m.podFilterMode {
-	case PodFilterDisrupting:
-		m.podFilterMode = PodFilterRescheduled
-	case PodFilterRescheduled:
-		m.podFilterMode = PodFilterAll
-	case PodFilterAll:
-		m.podFilterMode = PodFilterDisrupting
+// estimateRemaining returns an estimated remaining time string like "~5m 30s".
+// Only returns a value when progress >= 5% and elapsed > 0.
+func (m *Model) estimateRemaining() string {
+	if m.upgradeStartTime.IsZero() {
+		return ""
 	}
+	percent := m.progressPercent()
+	if percent < 5 || percent >= 100 {
+		return ""
+	}
+	elapsed := m.currentTime.Sub(m.upgradeStartTime)
+	remaining := time.Duration(float64(elapsed) * float64(100-percent) / float64(percent))
+	return formatDuration(remaining)
 }
 
-// podFilterLabel returns the display label for the current pod filter mode
-func (m *Model) podFilterLabel() string {
-	switch m.podFilterMode {
-	case PodFilterDisrupting:
-		return "disrupting"
-	case PodFilterRescheduled:
-		return "rescheduled"
-	case PodFilterAll:
-		return "all"
-	default:
-		return "disrupting"
-	}
-}
-
-// filteredEvents returns events based on the current filter mode
-func (m *Model) filteredEvents() []types.Event {
-	if m.eventFilter == EventFilterAll {
-		return m.events
-	}
-
-	var filtered []types.Event
-	for _, e := range m.events {
-		switch m.eventFilter {
-		case EventFilterUpgrade:
-			if isUpgradeEvent(e.Type) {
-				filtered = append(filtered, e)
-			}
-		case EventFilterWarnings:
-			if e.Severity == types.SeverityWarning || e.Severity == types.SeverityError {
-				filtered = append(filtered, e)
-			}
+// sortedEvents returns all events sorted by severity (errors first), then newest first.
+func (m *Model) sortedEvents() []types.Event {
+	sorted := make([]types.Event, len(m.events))
+	copy(sorted, m.events)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri := severityRank(sorted[i].Severity)
+		rj := severityRank(sorted[j].Severity)
+		if ri != rj {
+			return ri > rj // higher severity first
 		}
-	}
-	return filtered
-}
-
-// isUpgradeEvent returns true if the event type is upgrade-related
-func isUpgradeEvent(t types.EventType) bool {
-	switch t {
-	case types.EventNodeCordon,
-		types.EventNodeUncordon,
-		types.EventNodeReady,
-		types.EventNodeNotReady,
-		types.EventNodeVersion,
-		types.EventPodEvicted,
-		types.EventPodFailed,
-		types.EventPodDeleted,
-		types.EventMigration,
-		types.EventK8sNormal,
-		types.EventK8sWarning,
-		types.EventK8sError:
-		return true
-	default:
-		return false
-	}
-}
-
-// eventFilterName returns the display name for the current filter
-func (m *Model) eventFilterName() string {
-	switch m.eventFilter {
-	case EventFilterUpgrade:
-		return "UPGRADE"
-	case EventFilterWarnings:
-		return "WARNINGS"
-	case EventFilterAll:
-		return "ALL"
-	default:
-		return "UPGRADE"
-	}
+		return sorted[i].Timestamp.After(sorted[j].Timestamp)
+	})
+	return sorted
 }
 
 // calcScrollOffset returns scroll offset to keep selected item visible

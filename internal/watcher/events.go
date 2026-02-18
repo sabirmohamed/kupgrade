@@ -19,8 +19,9 @@ var (
 )
 
 // upgradeRelevantReasons filters K8s Events to upgrade-relevant ones.
-// Note: Pod lifecycle events (Killing, Scheduled, Evicted) are intentionally
-// excluded since PodWatcher already tracks these more precisely.
+// Note: Normal pod lifecycle events (Scheduled, Pulling, Pulled, Created, Started)
+// are intentionally excluded — they generate high volume during upgrades without
+// being actionable. See docs/events.md for the full reference.
 var upgradeRelevantReasons = map[string]bool{
 	// Node lifecycle
 	"NodeReady":               true,
@@ -41,8 +42,16 @@ var upgradeRelevantReasons = map[string]bool{
 	"FailedDrain": true,
 	"Cordon":      true,
 	"Uncordon":    true,
+	"Killing":     true, // kubelet killing containers during drain/eviction
+
+	// Pod rescheduling (primary EKS/GKE signal during drain)
+	"Scheduled":            true, // Pods rescheduling to surge/replacement nodes
+	"Preempting":           true, // Priority-based preemption during drain
+	"TaintManagerEviction": true, // Taint-based eviction (NoExecute)
 
 	// Failures only (not normal pod lifecycle)
+	"Failed":           true, // image pull failures (ErrImagePull, ImagePullBackOff)
+	"FailedCreate":     true, // DaemonSet/controller can't create pod on new node
 	"FailedKillPod":    true,
 	"FailedScheduling": true,
 	"FailedBinding":    true,
@@ -149,6 +158,7 @@ func (w *EventWatcher) onAdd(obj interface{}) {
 		PodName:   event.InvolvedObject.Name,
 		Namespace: event.Namespace,
 		Reason:    event.Reason,
+		EventName: event.Name,
 	})
 
 	// Parse surge events and notify callback

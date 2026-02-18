@@ -30,8 +30,6 @@ func (m Model) View() string {
 		return m.renderDrainsScreen()
 	case ScreenPods:
 		return m.renderPodsScreen()
-	case ScreenBlockers:
-		return m.renderBlockersScreen()
 	case ScreenEvents:
 		return m.renderEventsScreen()
 	default:

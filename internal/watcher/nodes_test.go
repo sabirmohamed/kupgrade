@@ -98,6 +98,10 @@ func (s *mockStageComputer) RecomputeVersions(versions []string) {
 }
 
 func newTestK8sNode(name, version string, ready, schedulable bool) *corev1.Node {
+	return newTestK8sNodeWithProvider(name, version, ready, schedulable, "")
+}
+
+func newTestK8sNodeWithProvider(name, version string, ready, schedulable bool, providerID string) *corev1.Node {
 	status := corev1.ConditionFalse
 	if ready {
 		status = corev1.ConditionTrue
@@ -109,6 +113,7 @@ func newTestK8sNode(name, version string, ready, schedulable bool) *corev1.Node 
 		},
 		Spec: corev1.NodeSpec{
 			Unschedulable: !schedulable,
+			ProviderID:    providerID,
 		},
 		Status: corev1.NodeStatus{
 			NodeInfo: corev1.NodeSystemInfo{
@@ -178,6 +183,7 @@ func TestOnDelete_UpgradeActive_RetainsAsReimaging(t *testing.T) {
 	// Store has another node so versions stay mixed
 	otherNode := newTestK8sNode("other-node", testCurrentVersion, true, true)
 	w := newNodeWatcher(emitter, stages, []interface{}{otherNode})
+	w.platform = types.PlatformAKS // AKS reimages in-place
 
 	// Delete a node during active upgrade
 	deletedNode := newTestK8sNode(testNodeName, testCurrentVersion, true, false)
@@ -809,6 +815,7 @@ func TestGhostVersion_UsesPreUpgradeVersion(t *testing.T) {
 
 	otherNode := newTestK8sNode("other-node", testCurrentVersion, true, true)
 	w := newNodeWatcher(emitter, stages, []interface{}{otherNode})
+	w.platform = types.PlatformAKS // AKS reimages in-place
 
 	// Simulate Pattern A: node was cordoned at v1.32.9, then AKS flips version
 	// to v1.33.2 before deletion
@@ -1130,6 +1137,286 @@ func TestSurgeNode_ShowsReadyNotComplete(t *testing.T) {
 		t.Error("COMPLETE latch must never fire for surge nodes, even after repeated calls")
 	}
 	w.mu.RUnlock()
+}
+
+// --- EKS/GKE multi-provider tests ---
+
+func TestOnDelete_EKS_TerminalDelete_MarksComplete(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testCurrentVersion,
+	}
+
+	otherNode := newTestK8sNode("other-node", testCurrentVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{otherNode})
+	w.platform = types.PlatformEKS
+
+	// Seed lifecycle with pre-upgrade version (set during cordon)
+	w.lifecycles[testNodeName] = &NodeLifecycle{
+		PreUpgradeVersion: testCurrentVersion,
+		DrainStartTime:    time.Now().Add(-30 * time.Second),
+	}
+
+	deletedNode := newTestK8sNode(testNodeName, testCurrentVersion, true, false)
+	w.onDelete(deletedNode)
+
+	// Should NOT create ghost (EKS deletions are terminal)
+	lc := w.lifecycles[testNodeName]
+	if lc != nil && lc.Reimaging {
+		t.Error("EKS node should NOT be retained as reimaging")
+	}
+
+	// Should be marked COMPLETE in lifecycle
+	if lc == nil || !lc.Completed {
+		t.Fatal("EKS deleted node should be marked Completed in lifecycle")
+	}
+
+	// Emitted state: Stage=COMPLETE, Deleted=true
+	found := false
+	for _, state := range emitter.nodeStates {
+		if state.Name == testNodeName {
+			if !state.Deleted {
+				t.Error("EKS terminal delete should emit Deleted=true")
+			}
+			if state.Stage != types.StageComplete {
+				t.Errorf("EKS terminal delete stage = %v, want COMPLETE", state.Stage)
+			}
+			if state.Version != testCurrentVersion {
+				t.Errorf("EKS terminal delete version = %q, want %q", state.Version, testCurrentVersion)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected emitted node state for EKS terminal delete")
+	}
+}
+
+func TestOnDelete_GKE_TerminalDelete_MarksComplete(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testCurrentVersion,
+	}
+
+	otherNode := newTestK8sNode("other-node", testCurrentVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{otherNode})
+	w.platform = types.PlatformGKE
+
+	deletedNode := newTestK8sNode("gke-node-abc123", testCurrentVersion, true, false)
+	w.onDelete(deletedNode)
+
+	// Verify COMPLETE + Deleted emission
+	found := false
+	for _, state := range emitter.nodeStates {
+		if state.Name == "gke-node-abc123" && state.Deleted && state.Stage == types.StageComplete {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected COMPLETE+Deleted state for GKE terminal delete")
+	}
+}
+
+func TestOnDelete_PlatformUnknown_FallsBackToTerminal(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testCurrentVersion,
+	}
+
+	otherNode := newTestK8sNode("other-node", testCurrentVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{otherNode})
+	// platform defaults to PlatformUnknown — should treat as terminal (safe default)
+
+	deletedNode := newTestK8sNode(testNodeName, testCurrentVersion, true, false)
+	w.onDelete(deletedNode)
+
+	// Unknown platform: should NOT create ghost (terminal is safer default)
+	lc := w.lifecycles[testNodeName]
+	if lc != nil && lc.Reimaging {
+		t.Error("unknown platform should not create reimaging ghost")
+	}
+
+	// Should emit COMPLETE+Deleted
+	found := false
+	for _, state := range emitter.nodeStates {
+		if state.Name == testNodeName && state.Deleted && state.Stage == types.StageComplete {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected COMPLETE+Deleted for unknown platform terminal delete")
+	}
+}
+
+func TestGhostTTL_ShorterOnEKS(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testCurrentVersion,
+	}
+	w := newNodeWatcher(emitter, stages, nil)
+	w.platform = types.PlatformEKS
+
+	// Create a ghost that's 1 minute old (< 5min AKS TTL, > 30s EKS TTL)
+	w.lifecycles[testNodeName] = &NodeLifecycle{
+		Reimaging:        true,
+		ReimageStartTime: time.Now().Add(-1 * time.Minute),
+		GhostState: &types.NodeState{
+			Name:    testNodeName,
+			Stage:   types.StageReimaging,
+			Version: testCurrentVersion,
+		},
+	}
+
+	w.CleanupExpiredGhosts()
+
+	// On EKS, 1-minute ghost should be cleaned up (TTL=30s)
+	lc := w.lifecycles[testNodeName]
+	if lc != nil && lc.Reimaging {
+		t.Error("EKS ghost at 1 minute should be cleaned up (TTL=30s)")
+	}
+}
+
+func TestPlatformDetection_FromOnAdd(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testCurrentVersion,
+		lowestVersion: testCurrentVersion,
+	}
+	w := newNodeWatcher(emitter, stages, nil)
+
+	if w.platform != types.PlatformUnknown {
+		t.Fatal("platform should start as unknown")
+	}
+
+	// Add a node with EKS providerID
+	eksNode := newTestK8sNodeWithProvider("eks-node", testCurrentVersion, true, true, "aws:///eu-north-1a/i-0abc123")
+	w.onAdd(eksNode)
+
+	if w.platform != types.PlatformEKS {
+		t.Errorf("platform = %q, want EKS after adding EKS node", w.platform)
+	}
+}
+
+func TestSurgePromotion_IsUpgradeComplete(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testTargetVersion, // All at target
+	}
+
+	// All live nodes at target version and schedulable
+	node1 := newTestK8sNode("node-1", testTargetVersion, true, true)
+	node2 := newTestK8sNode("node-2", testTargetVersion, true, true)
+	surgeNode := newTestK8sNode("surge-node", testTargetVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{node1, node2, surgeNode})
+
+	// At least one completed/reimaged node
+	w.lifecycles["node-1"] = &NodeLifecycle{Completed: true, CompletedAt: time.Now()}
+	w.lifecycles["surge-node"] = &NodeLifecycle{IsSurge: true}
+
+	if !w.isUpgradeComplete() {
+		t.Error("expected isUpgradeComplete=true: all nodes at target, one completed")
+	}
+}
+
+func TestSurgePromotion_NotCompleteWhenMixedVersions(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testCurrentVersion, // Mixed versions
+	}
+
+	node1 := newTestK8sNode("node-1", testCurrentVersion, true, true)
+	node2 := newTestK8sNode("node-2", testTargetVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{node1, node2})
+
+	if w.isUpgradeComplete() {
+		t.Error("should NOT be complete while versions are mixed")
+	}
+}
+
+func TestSurgePromotion_PromoteSurgeNodes(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testTargetVersion,
+	}
+
+	node1 := newTestK8sNode("node-1", testTargetVersion, true, true)
+	surgeNode1 := newTestK8sNode("surge-1", testTargetVersion, true, true)
+	surgeNode2 := newTestK8sNode("surge-2", testTargetVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{node1, surgeNode1, surgeNode2})
+
+	w.lifecycles["node-1"] = &NodeLifecycle{Completed: true, CompletedAt: time.Now()}
+	w.lifecycles["surge-1"] = &NodeLifecycle{IsSurge: true}
+	w.lifecycles["surge-2"] = &NodeLifecycle{IsSurge: true}
+
+	w.promoteSurgeNodes()
+
+	// Verify surge nodes promoted
+	for _, name := range []string{"surge-1", "surge-2"} {
+		lc := w.lifecycles[name]
+		if lc == nil {
+			t.Fatalf("lifecycle for %s should exist", name)
+		}
+		if lc.IsSurge {
+			t.Errorf("%s should no longer be marked as surge", name)
+		}
+		if !lc.Completed {
+			t.Errorf("%s should be marked as Completed", name)
+		}
+	}
+
+	if !w.surgePromoted {
+		t.Error("surgePromoted flag should be set")
+	}
+
+	// Verify promotion event emitted
+	found := false
+	for _, event := range emitter.events {
+		if event.Type == types.EventNodeReady && event.Severity == types.SeverityInfo {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected promotion info event")
+	}
+}
+
+func TestCheckUpgradeCompletion_StabilityTimer(t *testing.T) {
+	emitter := &mockEmitter{}
+	stages := &mockStageComputer{
+		targetVersion: testTargetVersion,
+		lowestVersion: testTargetVersion,
+	}
+
+	node1 := newTestK8sNode("node-1", testTargetVersion, true, true)
+	surgeNode := newTestK8sNode("surge-1", testTargetVersion, true, true)
+	w := newNodeWatcher(emitter, stages, []interface{}{node1, surgeNode})
+
+	w.lifecycles["node-1"] = &NodeLifecycle{Completed: true, CompletedAt: time.Now()}
+	w.lifecycles["surge-1"] = &NodeLifecycle{IsSurge: true}
+
+	// First call: records completionStableAt
+	w.CheckUpgradeCompletion()
+	if w.completionStableAt.IsZero() {
+		t.Fatal("completionStableAt should be set on first complete check")
+	}
+	if w.surgePromoted {
+		t.Error("should not promote immediately — needs stability period")
+	}
+
+	// Simulate 60s elapsed
+	w.completionStableAt = time.Now().Add(-61 * time.Second)
+	w.CheckUpgradeCompletion()
+
+	if !w.surgePromoted {
+		t.Error("should promote after 60s stability")
+	}
 }
 
 // Reuse fakeInformer/fakeStore from pdbs_test.go — same package.

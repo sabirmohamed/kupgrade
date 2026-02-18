@@ -116,6 +116,37 @@ func (f *TerminalFormatter) FormatDiffReport(report *snapshot.DiffReport, showAl
 		writeCategorySection(&builder, section.title, section.description, items, section.renderer)
 	}
 
+	// PDB changes section.
+	if len(report.PDBDiffs) > 0 {
+		builder.WriteString("  PDB Changes\n")
+		builder.WriteString("  " + strings.Repeat("─", 60) + "\n")
+		for i, diff := range report.PDBDiffs {
+			prefix := firstElemPrefix
+			if i == len(report.PDBDiffs)-1 {
+				prefix = lastElemPrefix
+			}
+			name := diff.Namespace + "/" + diff.Name
+			switch diff.Category {
+			case snapshot.PDBWillBlock:
+				detail := ""
+				if diff.After != nil {
+					if diff.After.MinAvailable != "" {
+						detail = fmt.Sprintf("minAvailable=%s, %d/%d healthy", diff.After.MinAvailable, diff.After.CurrentHealthy, diff.After.ExpectedPods)
+					} else if diff.After.MaxUnavailable != "" {
+						detail = fmt.Sprintf("maxUnavailable=%s, %d/%d healthy", diff.After.MaxUnavailable, diff.After.CurrentHealthy, diff.After.ExpectedPods)
+					}
+				}
+				builder.WriteString(fmt.Sprintf("    %s %s [WILL_BLOCK] %s\n", prefix, iconWarning, name))
+				if detail != "" {
+					builder.WriteString(fmt.Sprintf("         %s\n", detail))
+				}
+			case snapshot.PDBResolved:
+				builder.WriteString(fmt.Sprintf("    %s %s [RESOLVED] %s\n", prefix, iconResolved, name))
+			}
+		}
+		builder.WriteString("\n")
+	}
+
 	// Node changes section.
 	if len(report.NodeDiffs) > 0 {
 		builder.WriteString("  Node Changes\n")

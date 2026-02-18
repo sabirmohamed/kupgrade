@@ -22,14 +22,9 @@ type keyMap struct {
 	// Detail
 	Describe key.Binding
 	Tab      key.Binding
-	// Event filtering
-	EventUpgrade   key.Binding
-	EventWarnings  key.Binding
-	EventAll       key.Binding
-	EventAggregate key.Binding
-	EventExpand    key.Binding
-	// Pod filtering
-	PodFilter key.Binding
+	// Event expand
+	EventExpand key.Binding
+	// Pod search
 	PodSearch key.Binding
 }
 
@@ -105,29 +100,9 @@ var defaultKeys = keyMap{
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "focus"),
 	),
-	EventUpgrade: key.NewBinding(
-		key.WithKeys("u"),
-		key.WithHelp("u", "upgrade"),
-	),
-	EventWarnings: key.NewBinding(
-		key.WithKeys("w"),
-		key.WithHelp("w", "warnings"),
-	),
-	EventAll: key.NewBinding(
-		key.WithKeys("a"),
-		key.WithHelp("a", "all"),
-	),
-	EventAggregate: key.NewBinding(
-		key.WithKeys("g"),
-		key.WithHelp("g", "group"),
-	),
 	EventExpand: key.NewBinding(
 		key.WithKeys("e"),
 		key.WithHelp("e", "expand"),
-	),
-	PodFilter: key.NewBinding(
-		key.WithKeys("a"),
-		key.WithHelp("a", "cycle filter"),
 	),
 	PodSearch: key.NewBinding(
 		key.WithKeys("/"),
@@ -147,8 +122,6 @@ func screenFromKey(msg tea.KeyMsg) Screen {
 	case "3":
 		return ScreenPods
 	case "4":
-		return ScreenBlockers
-	case "5":
 		return ScreenEvents
 	default:
 		return Screen(-1)

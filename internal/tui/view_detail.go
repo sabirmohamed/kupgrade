@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
@@ -90,9 +91,9 @@ func eventKey(e types.Event) string {
 	return e.Timestamp.Format("15:04:05.000000") + ":" + e.Message
 }
 
-// findEventByKey searches the filtered events for one matching the composite key.
+// findEventByKey searches the events for one matching the composite key.
 func (m Model) findEventByKey(key string) (types.Event, bool) {
-	for _, e := range m.filteredEvents() {
+	for _, e := range m.events {
 		if eventKey(e) == key {
 			return e, true
 		}
@@ -108,7 +109,14 @@ func (m *Model) openDetail(dt DetailType, key string) tea.Cmd {
 	m.resizeDetailViewport()
 
 	if dt == DetailEvent {
-		m.detailViewport.SetContent(m.renderEventDetailContent())
+		// K8s events use "namespace/eventName" key → kubectl describe
+		// Internal events use "timestamp:message" key → in-memory summary
+		if strings.Contains(key, "/") {
+			m.detailViewport.SetContent("Loading...")
+			m.detailViewport.GotoTop()
+			return m.fetchDescribe()
+		}
+		m.detailViewport.SetContent(colorizeDescribe(m.renderEventDetailContent()))
 		m.detailViewport.GotoTop()
 		return nil
 	}
@@ -117,6 +125,134 @@ func (m *Model) openDetail(dt DetailType, key string) tea.Cmd {
 	m.detailViewport.SetContent("Loading...")
 	m.detailViewport.GotoTop()
 	return m.fetchDescribe()
+}
+
+// Describe output colorization styles
+var (
+	describeSectionStyle = lipgloss.NewStyle().Foreground(colorReimaging).Bold(true)   // cyan bold
+	describeKeyStyle     = lipgloss.NewStyle().Foreground(colorInfo)                   // blue
+	describeTrueStyle    = lipgloss.NewStyle().Foreground(colorSuccess)                // green
+	describeFalseStyle   = lipgloss.NewStyle().Foreground(colorError)                  // red
+	describeWarningStyle = lipgloss.NewStyle().Foreground(colorWarning)                // yellow
+	describeDimStyle     = lipgloss.NewStyle().Foreground(colorTextDim)                // dim
+	describeValueStyle   = lipgloss.NewStyle().Foreground(colorText)                   // default text
+	describeNoneStyle    = lipgloss.NewStyle().Foreground(colorTextMuted).Italic(true) // <none>/<nil>
+)
+
+// colorizeDescribe applies syntax highlighting to kubectl describe output.
+// Parses line-by-line: section headers → cyan bold, keys → blue, True/False → green/red.
+func colorizeDescribe(text string) string {
+	lines := strings.Split(text, "\n")
+	result := make([]string, len(lines))
+
+	inEventsTable := false
+
+	for i, line := range lines {
+		trimmed := strings.TrimRight(line, " ")
+
+		// Blank lines
+		if trimmed == "" {
+			result[i] = ""
+			inEventsTable = false
+			continue
+		}
+
+		// Section header: no leading whitespace, ends with ":"
+		// e.g. "Conditions:", "Volumes:", "Events:", "Containers:"
+		if len(trimmed) > 1 && trimmed[0] != ' ' && trimmed[0] != '\t' && trimmed[len(trimmed)-1] == ':' {
+			result[i] = describeSectionStyle.Render(trimmed)
+			if trimmed == "Events:" {
+				inEventsTable = true
+			}
+			continue
+		}
+
+		// Events table header line (underscores: "  ----  ------")
+		if inEventsTable && isEventsTableDivider(trimmed) {
+			result[i] = describeDimStyle.Render(trimmed)
+			continue
+		}
+
+		// Events table rows: Warning lines get yellow treatment
+		if inEventsTable && strings.Contains(trimmed, "Warning") {
+			result[i] = describeWarningStyle.Render(trimmed)
+			continue
+		}
+
+		// Key: Value line (leading whitespace, then Key: Value)
+		if colonIdx := findKeyColon(trimmed); colonIdx > 0 {
+			key := trimmed[:colonIdx+1]   // includes the ":"
+			value := trimmed[colonIdx+1:] // everything after ":"
+
+			coloredKey := describeKeyStyle.Render(key)
+			coloredValue := colorizeValue(value)
+			result[i] = coloredKey + coloredValue
+			continue
+		}
+
+		// Default: plain text
+		result[i] = describeValueStyle.Render(trimmed)
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// findKeyColon finds the colon in a "Key: Value" pattern.
+// Returns -1 if the line doesn't match the pattern.
+// Handles indented lines like "  Name:         foo" and "  Reason:  Error".
+func findKeyColon(line string) int {
+	// Skip leading whitespace
+	start := 0
+	for start < len(line) && (line[start] == ' ' || line[start] == '\t') {
+		start++
+	}
+	// Find first colon after a word
+	for i := start; i < len(line); i++ {
+		if line[i] == ':' {
+			// Must have at least one word char before the colon
+			if i > start {
+				return i
+			}
+			return -1
+		}
+		// Key part: allow letters, digits, hyphens, dots, underscores, slashes
+		c := line[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
+			c != '-' && c != '.' && c != '_' && c != '/' && c != ' ' {
+			return -1
+		}
+	}
+	return -1
+}
+
+// colorizeValue applies color to the value part of a key-value line.
+func colorizeValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+
+	switch trimmed {
+	case "True":
+		return strings.Replace(value, "True", describeTrueStyle.Render("True"), 1)
+	case "False":
+		return strings.Replace(value, "False", describeFalseStyle.Render("False"), 1)
+	case "<none>", "<nil>", "<unset>":
+		return strings.Replace(value, trimmed, describeNoneStyle.Render(trimmed), 1)
+	}
+
+	return describeValueStyle.Render(value)
+}
+
+// isEventsTableDivider returns true for the dashed separator line in the Events table.
+func isEventsTableDivider(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) < 3 {
+		return false
+	}
+	for _, c := range trimmed {
+		if c != '-' && c != ' ' {
+			return false
+		}
+	}
+	return true
 }
 
 // resizeDetailViewport sets viewport dimensions for the detail overlay

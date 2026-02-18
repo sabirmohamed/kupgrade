@@ -513,13 +513,27 @@ func buildPDBSnapshots(pdbs *policyv1.PodDisruptionBudgetList) []types.PDBSnapsh
 	snapshots := make([]types.PDBSnapshot, 0, len(pdbs.Items))
 	for i := range pdbs.Items {
 		pdb := &pdbs.Items[i]
-		snapshots = append(snapshots, types.PDBSnapshot{
+
+		snap := types.PDBSnapshot{
 			Name:               pdb.Name,
 			Namespace:          pdb.Namespace,
 			DisruptionsAllowed: pdb.Status.DisruptionsAllowed,
 			CurrentHealthy:     pdb.Status.CurrentHealthy,
+			DesiredHealthy:     pdb.Status.DesiredHealthy,
 			ExpectedPods:       pdb.Status.ExpectedPods,
-		})
+		}
+
+		if pdb.Spec.MinAvailable != nil {
+			snap.MinAvailable = pdb.Spec.MinAvailable.String()
+		}
+		if pdb.Spec.MaxUnavailable != nil {
+			snap.MaxUnavailable = pdb.Spec.MaxUnavailable.String()
+		}
+
+		// Structural check: PDB requires ALL pods healthy, no room for eviction
+		snap.WillBlockDrain = snap.DesiredHealthy >= snap.ExpectedPods && snap.ExpectedPods > 0
+
+		snapshots = append(snapshots, snap)
 	}
 	return snapshots
 }

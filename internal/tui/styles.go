@@ -1,13 +1,21 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Layout constants (T2: extracted from magic numbers)
+// Layout constants
 const (
-	// Header
-	headerProgressBarWidth = 10
+	// Progress bars
+	headerProgressBarWidth = 8  // compact bar in header
+	dialogProgressBarWidth = 24 // wider bar in pill dialog
+	dialogWidth            = 74 // centered pill dialog width
+
+	// Stage pill dark foreground
+	pillDarkFg = "#1a1b26"
 )
 
 // Color palette - Omarchy Tokyo Night theme
@@ -15,9 +23,7 @@ const (
 var (
 	// Backgrounds (layered depth)
 	colorBg        = lipgloss.Color("#1a1b26") // Main background
-	colorBgAlt     = lipgloss.Color("#16161e") // Alternate panel background
 	colorSelected  = lipgloss.Color("#414868") // Selected item background
-	colorBorder    = lipgloss.Color("#565f89") // Border/divider lines
 	colorBorderDim = lipgloss.Color("#32344a") // Subtle borders
 
 	// Text hierarchy
@@ -27,12 +33,14 @@ var (
 	colorTextDim   = lipgloss.Color("#565f89") // Tertiary/inactive text
 
 	// ANSI color slots (terminal-safe)
-	colorYellow = lipgloss.Color("#e0af68") // color3
-	colorCyan   = lipgloss.Color("#449dab") // color6
+	colorCyan = lipgloss.Color("#449dab") // color6
 
 	// Bright variants
 	colorBrightRed    = lipgloss.Color("#ff7a93") // color9
 	colorBrightYellow = lipgloss.Color("#ff9e64") // color11 (orange)
+
+	// Accent colors (Tokyo Night extended)
+	colorPurple = lipgloss.Color("#9d7cd8") // pool names
 
 	// Semantic: Stage colors
 	colorReady     = lipgloss.Color("#787c99") // Muted grey - waiting
@@ -62,73 +70,22 @@ var (
 
 	versionCompleteStyle = lipgloss.NewStyle().
 				Foreground(colorComplete)
-
-	timeStyle = lipgloss.NewStyle().
-			Foreground(colorTextMuted)
-)
-
-// Stage styles
-var stageColors = map[string]lipgloss.Color{
-	"READY":     colorReady,
-	"CORDONED":  colorCordoned,
-	"DRAINING":  colorDraining,
-	"REIMAGING": colorReimaging,
-	"COMPLETE":  colorComplete,
-}
-
-func stageStyle(stage string) lipgloss.Style {
-	color, ok := stageColors[stage]
-	if !ok {
-		color = colorText
-	}
-	return lipgloss.NewStyle().Foreground(color).Bold(true)
-}
-
-func stageStyleSelected(stage string) lipgloss.Style {
-	return stageStyle(stage).Underline(true)
-}
-
-// Node card styles (width set dynamically in view.go)
-var (
-	// Selected row in node list - subtle rounded box
-	nodeListSelectedStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
-		Padding(0, 1)
 )
 
 // Panel styles
 var (
-	// Left border only for blockers section
-	blockerPanelStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "│"}).
-				BorderForeground(colorWarning).
-				PaddingLeft(1)
-
-	// Red left border for active blockers
-	activeBlockerPanelStyle = lipgloss.NewStyle().
-				Border(lipgloss.Border{Left: "│"}).
-				BorderForeground(colorError).
-				PaddingLeft(1)
-
 	panelTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorText)
+		Bold(true).
+		Foreground(colorText)
 )
 
 // Event styles
 var (
-	timestampStyle = lipgloss.NewStyle().
-			Foreground(colorTextDim)
-
 	infoIcon    = "•"
 	warningIcon = "⚠"
 	errorIcon   = "✖"
 	migrateIcon = "↹"
 	checkIcon   = "✓"
-
-	infoStyle = lipgloss.NewStyle().
-			Foreground(colorInfo)
 
 	warningStyle = lipgloss.NewStyle().
 			Foreground(colorWarning)
@@ -136,15 +93,15 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(colorError)
 
+	eventCountStyle = lipgloss.NewStyle().
+			Foreground(colorTextBold).Bold(true)
+
 	successStyle = lipgloss.NewStyle().
 			Foreground(colorSuccess)
 )
 
 // Footer styles
 var (
-	footerStyle = lipgloss.NewStyle().
-			Foreground(colorTextMuted)
-
 	footerKeyStyle = lipgloss.NewStyle().
 			Foreground(colorText).
 			Bold(true)
@@ -173,7 +130,186 @@ var (
 		Foreground(colorBorderDim)
 )
 
-// Layout helpers
-func centerText(s string, width int) string {
-	return lipgloss.NewStyle().Width(width).Align(lipgloss.Center).Render(s)
+// stageForegroundColors maps stage names to foreground-only colors for table cells.
+// Use these instead of stagePillStyles inside tables to preserve alternating row backgrounds.
+var stageForegroundColors = map[string]lipgloss.Color{
+	"READY":       colorReady,
+	"CORDONED":    colorCordoned,
+	"DRAINING":    colorDraining,
+	"QUARANTINED": colorError,
+	"REIMAGING":   colorReimaging,
+	"COMPLETE":    colorComplete,
+	"SURGE":       lipgloss.Color("#bb9af7"),
+}
+
+// Stage pill styles — colored background with dark foreground, bold
+var stagePillStyles = map[string]lipgloss.Style{
+	"READY":       lipgloss.NewStyle().Background(colorReady).Foreground(lipgloss.Color("#c0caf5")).Bold(true).Padding(0, 1),
+	"CORDONED":    lipgloss.NewStyle().Background(colorCordoned).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
+	"DRAINING":    lipgloss.NewStyle().Background(colorDraining).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
+	"QUARANTINED": lipgloss.NewStyle().Background(colorError).Foreground(lipgloss.Color("#ffffff")).Bold(true).Padding(0, 1),
+	"REIMAGING":   lipgloss.NewStyle().Background(colorReimaging).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
+	"COMPLETE":    lipgloss.NewStyle().Background(colorComplete).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
+	"SURGE":       lipgloss.NewStyle().Background(lipgloss.Color("#bb9af7")).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
+}
+
+// Tab bar styles
+var (
+	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Background(colorSelected).Foreground(lipgloss.Color("#c0caf5")).Padding(0, 1)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(colorTextMuted)
+	tabSepStyle      = lipgloss.NewStyle().Foreground(colorTextDim)
+)
+
+// Screen tab definitions
+type screenTab struct {
+	icon   string
+	label  string
+	screen Screen
+}
+
+var screenTabs = []screenTab{
+	{"★", "Dashboard", ScreenOverview},
+	{"●", "Nodes", ScreenNodes},
+	{"⇌", "Drains", ScreenDrains},
+	{"⫼", "Pods", ScreenPods},
+	{"●", "Events", ScreenEvents},
+}
+
+// renderStagePill renders a stage name with count as a colored pill: [DRAINING 2]
+// Always uses the stage color — zero-count pills are NOT dimmed.
+func renderStagePill(stage string, count int) string {
+	label := fmt.Sprintf("%s %d", stage, count)
+	style, ok := stagePillStyles[stage]
+	if !ok {
+		return label
+	}
+	return style.Render(label)
+}
+
+// renderStagePillInline renders just a stage name as a colored pill (no count)
+func renderStagePillInline(stage string) string {
+	style, ok := stagePillStyles[stage]
+	if !ok {
+		return stage
+	}
+	return style.Render(stage)
+}
+
+// renderTabBar renders the top tab bar with screen icons and counts.
+// Active screen is highlighted, inactive screens are muted.
+func (m Model) renderTabBar(stageCounts map[string]int) string {
+	sep := tabSepStyle.Render(" │ ")
+	var parts []string
+
+	for _, tab := range screenTabs {
+		label := fmt.Sprintf("%s %s", tab.icon, tab.label)
+
+		// Add count for relevant screens
+		switch tab.screen {
+		case ScreenNodes:
+			label += fmt.Sprintf(" (%d)", m.totalNodes())
+		case ScreenDrains:
+			drainCount := stageCounts["CORDONED"] + stageCounts["DRAINING"]
+			if drainCount > 0 {
+				label += fmt.Sprintf(" (%d)", drainCount)
+			}
+		case ScreenEvents:
+			if len(m.events) > 0 {
+				label += fmt.Sprintf(" (%d)", len(m.events))
+			}
+		}
+
+		if tab.screen == m.screen {
+			parts = append(parts, tabActiveStyle.Render(label))
+		} else {
+			parts = append(parts, tabInactiveStyle.Render(label))
+		}
+	}
+
+	return strings.Join(parts, sep)
+}
+
+// Status bar styles
+var (
+	sbStatusStyle = lipgloss.NewStyle().
+			Background(colorError).
+			Foreground(colorBg).
+			Bold(true).
+			Padding(0, 1)
+
+	sbStatusWatchingStyle = lipgloss.NewStyle().
+				Background(colorInfo).
+				Foreground(colorBg).
+				Bold(true).
+				Padding(0, 1)
+
+	sbStatusCompleteStyle = lipgloss.NewStyle().
+				Background(colorSuccess).
+				Foreground(colorBg).
+				Bold(true).
+				Padding(0, 1)
+
+	sbTextStyle = lipgloss.NewStyle().
+			Background(colorSelected).
+			Foreground(colorText).
+			Padding(0, 1)
+
+	sbFillStyle = lipgloss.NewStyle().
+			Background(colorSelected)
+
+	sbCountStyle = lipgloss.NewStyle().
+			Background(colorPurple).
+			Foreground(lipgloss.Color("#ffffff")).
+			Bold(true).
+			Padding(0, 1)
+
+	sbLiveStyle = lipgloss.NewStyle().
+			Background(colorSelected).
+			Padding(0, 1)
+
+	sbBrandStyle = lipgloss.NewStyle().
+			Background(colorInfo).
+			Foreground(lipgloss.Color("#ffffff")).
+			Bold(true).
+			Padding(0, 1)
+)
+
+// Key hint styles
+var (
+	keyBadgeStyle = lipgloss.NewStyle().
+			Background(colorSelected).
+			Foreground(colorTextBold).
+			Bold(true).
+			Padding(0, 1)
+
+	keyLabelStyle = lipgloss.NewStyle().
+			Foreground(colorTextDim)
+)
+
+// Dialog styles
+var (
+	dialogBoxStyle = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPurple).
+		Padding(0, 2).
+		Width(dialogWidth)
+)
+
+// Info card styles
+var (
+	cardTitleStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorTextBold)
+)
+
+// renderSectionHeader renders: ── TITLE ───────────────────
+func renderSectionHeader(title string, width int) string {
+	prefix := "── "
+	suffix := " "
+	remaining := width - len(prefix) - len(title) - len(suffix)
+	if remaining < 4 {
+		remaining = 4
+	}
+	line := prefix + title + suffix + strings.Repeat("─", remaining)
+	return panelTitleStyle.Render(line)
 }

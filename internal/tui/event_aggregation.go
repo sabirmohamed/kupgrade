@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -20,47 +19,38 @@ type AggregatedEvent struct {
 	SampleEvent types.Event // Representative event for details
 }
 
-// aggregateEvents collapses similar events into aggregated groups
+// aggregateEvents collapses similar events into aggregated groups.
+// Groups by Event.Reason field (populated by watcher), falling back to EventType.
 func aggregateEvents(events []types.Event) []AggregatedEvent {
 	if len(events) == 0 {
 		return nil
 	}
 
-	// Group by reason
 	groups := make(map[string]*AggregatedEvent)
+	order := make([]string, 0) // preserve insertion order
 
 	for _, e := range events {
-		reason := extractReason(e.Message)
-		if reason == "" {
-			reason = string(e.Type)
-		}
-
-		key := reason
+		key := eventAggregationKey(e)
 
 		if existing, ok := groups[key]; ok {
-			// Add to existing group
 			existing.Count++
 			if e.Timestamp.After(existing.Timestamp) {
 				existing.Timestamp = e.Timestamp
 			}
 
-			// Track affected resource
 			resource := extractResource(e)
 			if resource != "" && !containsString(existing.Resources, resource) {
 				existing.Resources = append(existing.Resources, resource)
 			}
 
-			// Update severity to worst case
 			if severityRank(e.Severity) > severityRank(existing.Severity) {
 				existing.Severity = e.Severity
 			}
 
-			// Clear node if events span multiple nodes
 			if existing.NodeName != "" && existing.NodeName != e.NodeName {
 				existing.NodeName = ""
 			}
 		} else {
-			// Create new group
 			resource := extractResource(e)
 			resources := []string{}
 			if resource != "" {
@@ -68,7 +58,7 @@ func aggregateEvents(events []types.Event) []AggregatedEvent {
 			}
 
 			groups[key] = &AggregatedEvent{
-				Reason:      reason,
+				Reason:      key,
 				Severity:    e.Severity,
 				Timestamp:   e.Timestamp,
 				Count:       1,
@@ -76,20 +66,39 @@ func aggregateEvents(events []types.Event) []AggregatedEvent {
 				NodeName:    e.NodeName,
 				SampleEvent: e,
 			}
+			order = append(order, key)
 		}
 	}
 
-	// Convert to slice and sort by timestamp (most recent first)
+	// Sort by severity (worst first), then by timestamp (newest first)
 	result := make([]AggregatedEvent, 0, len(groups))
-	for _, ag := range groups {
-		result = append(result, *ag)
+	for _, key := range order {
+		result = append(result, *groups[key])
 	}
 
-	sort.Slice(result, func(i, j int) bool {
+	sort.SliceStable(result, func(i, j int) bool {
+		ri := severityRank(result[i].Severity)
+		rj := severityRank(result[j].Severity)
+		if ri != rj {
+			return ri > rj
+		}
 		return result[i].Timestamp.After(result[j].Timestamp)
 	})
 
 	return result
+}
+
+// eventAggregationKey returns the grouping key for an event.
+// Uses Event.Reason (populated by watcher for K8s events), then bracket-parsed reason,
+// then falls back to EventType string.
+func eventAggregationKey(e types.Event) string {
+	if e.Reason != "" {
+		return e.Reason
+	}
+	if reason := extractReason(e.Message); reason != "" {
+		return reason
+	}
+	return string(e.Type)
 }
 
 // extractReason extracts the reason from event message like "[BackOff] pod..."
@@ -106,13 +115,10 @@ func extractReason(msg string) string {
 // extractResource extracts the resource name from event
 func extractResource(e types.Event) string {
 	if e.PodName != "" && e.PodName != "-" {
-		// Shorten pod name if it has a hash suffix
 		name := e.PodName
 		if idx := strings.LastIndex(name, "-"); idx > 0 {
 			suffix := name[idx+1:]
-			// If suffix looks like a hash (5+ chars, alphanumeric)
 			if len(suffix) >= 5 && isAlphanumeric(suffix) {
-				// Get deployment/statefulset name
 				prefix := name[:idx]
 				if idx2 := strings.LastIndex(prefix, "-"); idx2 > 0 {
 					suffix2 := prefix[idx2+1:]
@@ -131,7 +137,7 @@ func extractResource(e types.Event) string {
 	return ""
 }
 
-// isAlphanumeric checks if string is alphanumeric
+// isAlphanumeric checks if string is alphanumeric (lowercase + digits only)
 func isAlphanumeric(s string) bool {
 	for _, c := range s {
 		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
@@ -163,36 +169,4 @@ func severityRank(s types.Severity) int {
 	default:
 		return 0
 	}
-}
-
-// formatAggregatedEvent formats an aggregated event for display
-func (a AggregatedEvent) Format(icon string) string {
-	if a.Count == 1 {
-		// Single event - show original message
-		return a.SampleEvent.Message
-	}
-
-	// Multiple events - show aggregated format
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s] ×%d ", a.Reason, a.Count))
-
-	// Group resources by type
-	if len(a.Resources) > 0 {
-		if len(a.Resources) <= 3 {
-			sb.WriteString(strings.Join(a.Resources, ", "))
-		} else {
-			sb.WriteString(fmt.Sprintf("%s, %s +%d more",
-				a.Resources[0], a.Resources[1], len(a.Resources)-2))
-		}
-	}
-
-	return sb.String()
-}
-
-// formatResourceList formats the expanded resource list
-func (a AggregatedEvent) FormatResourceList() string {
-	if len(a.Resources) == 0 {
-		return ""
-	}
-	return "→ " + strings.Join(a.Resources, ", ")
 }

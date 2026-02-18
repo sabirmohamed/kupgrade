@@ -13,6 +13,15 @@ func TestUpgradeRelevantReasons_AKSEvents(t *testing.T) {
 	}
 }
 
+func TestUpgradeRelevantReasons_EKSGKEEvents(t *testing.T) {
+	reasons := []string{"Scheduled", "Preempting", "TaintManagerEviction", "Killing", "FailedScheduling"}
+	for _, reason := range reasons {
+		if !upgradeRelevantReasons[reason] {
+			t.Errorf("upgradeRelevantReasons missing EKS/GKE reason %q", reason)
+		}
+	}
+}
+
 func TestSurgeCreatedPattern(t *testing.T) {
 	tests := []struct {
 		name     string

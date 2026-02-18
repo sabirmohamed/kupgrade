@@ -11,12 +11,28 @@ import (
 )
 
 func init() {
-	// Silence client-go's klog output. During upgrades, informer watches
-	// drop and reconnect, producing warning/error logs that corrupt the TUI.
-	// Both settings are needed: SetOutput redirects the logger, but errors
-	// and warnings still go to stderr unless LogToStderr is disabled.
+	// Fully silence client-go's klog output. During control plane upgrades,
+	// the API server restarts and informer watches drop/reconnect, producing
+	// reflector error/warning logs that corrupt the Bubble Tea TUI display.
+	//
+	// Three settings are needed because klog v2 has multiple output paths:
+	// 1. SetOutput(Discard) — redirects the standard log writer
+	// 2. LogToStderr(false) — prevents fallback to os.Stderr
+	// 3. SetLogFilter — drops all messages before they reach any writer
 	klog.SetOutput(io.Discard)
 	klog.LogToStderr(false)
+	klog.SetLogFilter(&discardFilter{})
+}
+
+// discardFilter implements klog.LogFilter to drop all log messages.
+type discardFilter struct{}
+
+func (d *discardFilter) Filter(args []interface{}) []interface{} { return nil }
+func (d *discardFilter) FilterF(format string, args []interface{}) (string, []interface{}) {
+	return "", nil
+}
+func (d *discardFilter) FilterS(msg string, keysAndValues []interface{}) (string, []interface{}) {
+	return "", nil
 }
 
 func main() {

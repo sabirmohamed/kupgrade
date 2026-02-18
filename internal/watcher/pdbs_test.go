@@ -188,67 +188,47 @@ func TestBuildBlockers(t *testing.T) {
 	gatekeeperLabels := map[string]string{"app": "gatekeeper"}
 	healthyLabels := map[string]string{"app": "healthy"}
 
-	// Scenario: 1 active blocker (PDB with pod on draining node),
-	// 2 risks (PDBs with pods elsewhere), 1 healthy PDB (has budget)
+	// Scenario: 1 active blocker (PDB with pod on draining node + stalled),
+	// 2 PDBs with no pods on draining node (should NOT appear), 1 healthy PDB
 	pdbStore := []interface{}{
 		// Active blocker: web PDB matches pod on draining node-a
 		newTestPDB("web-pdb", testNamespace, 0, 2, appLabels),
-		// Risk: metrics-server PDB, no pods on draining nodes
+		// No pods on draining nodes — should NOT appear
 		newTestPDB("metrics-pdb", "kube-system", 0, 1, metricsLabels),
-		// Risk: gatekeeper PDB, no pods on draining nodes
 		newTestPDB("gatekeeper-pdb", "gatekeeper-system", 0, 3, gatekeeperLabels),
 		// Healthy: has disruption budget available
 		newTestPDB("healthy-pdb", testNamespace, 1, 3, healthyLabels),
 	}
 
 	pods := []*corev1.Pod{
-		// web pod on draining node
 		newTestPod("web-1", testNamespace, testNodeA, appLabels),
 		newTestPod("web-2", testNamespace, testNodeB, appLabels),
-		// metrics-server pod on non-draining node
 		newTestPod("metrics-1", "kube-system", testNodeB, metricsLabels),
-		// gatekeeper pod on non-draining node
 		newTestPod("gatekeeper-1", "gatekeeper-system", testNodeB, gatekeeperLabels),
-		// healthy pod on draining node (but PDB has budget)
 		newTestPod("healthy-1", testNamespace, testNodeA, healthyLabels),
 	}
 
 	drainingNodes := []string{testNodeA}
 
-	// Build a fake PDBWatcher with a populated store
 	w := &PDBWatcher{
 		informer:          &fakeInformer{objects: pdbStore},
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	// With drain stalled, should show active blocker
+	// With drain stalled, should show only the active blocker
 	blockers := w.BuildBlockers(drainingNodes, pods, drainStalled)
 
-	// Count by tier
-	var activeCount, riskCount int
-	for _, b := range blockers {
-		switch b.Tier {
-		case types.BlockerTierActive:
-			activeCount++
-			if b.NodeName != testNodeA {
-				t.Errorf("active blocker has wrong NodeName: got %q, want %q", b.NodeName, testNodeA)
-			}
-			if b.Name != "web-pdb" {
-				t.Errorf("active blocker has wrong Name: got %q, want %q", b.Name, "web-pdb")
-			}
-		case types.BlockerTierRisk:
-			riskCount++
-			if b.NodeName != "" {
-				t.Errorf("risk blocker should not have NodeName, got %q", b.NodeName)
-			}
-		}
+	if len(blockers) != 1 {
+		t.Fatalf("expected 1 blocker (active only), got %d", len(blockers))
 	}
-
-	if activeCount != 1 {
-		t.Errorf("expected 1 active blocker, got %d", activeCount)
+	if blockers[0].Tier != types.BlockerTierActive {
+		t.Errorf("expected active tier, got %v", blockers[0].Tier)
 	}
-	if riskCount != 2 {
-		t.Errorf("expected 2 risk blockers, got %d (metrics-pdb + gatekeeper-pdb)", riskCount)
+	if blockers[0].Name != "web-pdb" {
+		t.Errorf("active blocker Name = %q, want %q", blockers[0].Name, "web-pdb")
+	}
+	if blockers[0].NodeName != testNodeA {
+		t.Errorf("active blocker NodeName = %q, want %q", blockers[0].NodeName, testNodeA)
 	}
 }
 
@@ -278,7 +258,8 @@ func TestBuildBlockers_PDBBudgetRecovers(t *testing.T) {
 func TestBuildBlockers_NoDrainingNodes(t *testing.T) {
 	appLabels := map[string]string{"app": "web"}
 
-	// PDB at risk but no draining nodes — should return risk only
+	// PDB at risk but no draining nodes — should return nothing
+	// (no active blockers since no drains are happening)
 	pdbStore := []interface{}{
 		newTestPDB("web-pdb", testNamespace, 0, 2, appLabels),
 	}
@@ -293,11 +274,8 @@ func TestBuildBlockers_NoDrainingNodes(t *testing.T) {
 	}
 
 	blockers := w.BuildBlockers(nil, pods, drainStalled)
-	if len(blockers) != 1 {
-		t.Fatalf("expected 1 blocker, got %d", len(blockers))
-	}
-	if blockers[0].Tier != types.BlockerTierRisk {
-		t.Errorf("expected risk tier, got %v", blockers[0].Tier)
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers when no draining nodes, got %d", len(blockers))
 	}
 }
 
@@ -415,10 +393,9 @@ func TestBuildBlockers_StartTimePreservedAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestBuildBlockers_DrainProgressingNoActiveBlocker(t *testing.T) {
+func TestBuildBlockers_DrainProgressingNoBlocker(t *testing.T) {
 	// Key test: When drain is progressing (not stalled), PDB should NOT
-	// show as active blocker — only as risk. This prevents transient PDB
-	// pacing during normal drain from appearing as blockers.
+	// appear at all. Transient DisruptionsAllowed==0 is normal pacing.
 	appLabels := map[string]string{"app": "web"}
 
 	pdbStore := []interface{}{
@@ -434,17 +411,11 @@ func TestBuildBlockers_DrainProgressingNoActiveBlocker(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	// Drain is progressing (not stalled) — should show as risk only
+	// Drain is progressing (not stalled) — should show nothing
 	blockers := w.BuildBlockers([]string{testNodeA}, pods, drainProgressing)
 
-	if len(blockers) != 1 {
-		t.Fatalf("expected 1 blocker (risk), got %d", len(blockers))
-	}
-	if blockers[0].Tier != types.BlockerTierRisk {
-		t.Errorf("expected risk tier when drain progressing, got %v", blockers[0].Tier)
-	}
-	if blockers[0].NodeName != "" {
-		t.Errorf("risk blocker should not have NodeName, got %q", blockers[0].NodeName)
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers when drain progressing, got %d", len(blockers))
 	}
 }
 
@@ -465,24 +436,25 @@ func TestBuildBlockers_DrainStalledBecomesActiveBlocker(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	// First: drain progressing — only risk
+	// First: drain progressing — nothing shown
 	blockers1 := w.BuildBlockers([]string{testNodeA}, pods, drainProgressing)
-	if len(blockers1) != 1 || blockers1[0].Tier != types.BlockerTierRisk {
-		t.Fatalf("expected 1 risk blocker when progressing, got %d with tier %v", len(blockers1), blockers1[0].Tier)
+	if len(blockers1) != 0 {
+		t.Fatalf("expected 0 blockers when progressing, got %d", len(blockers1))
 	}
 
 	// Then: drain stalls — becomes active blocker
 	blockers2 := w.BuildBlockers([]string{testNodeA}, pods, drainStalled)
 	if len(blockers2) != 1 || blockers2[0].Tier != types.BlockerTierActive {
-		t.Fatalf("expected 1 active blocker when stalled, got %d with tier %v", len(blockers2), blockers2[0].Tier)
+		t.Fatalf("expected 1 active blocker when stalled, got %d", len(blockers2))
 	}
 	if blockers2[0].NodeName != testNodeA {
-		t.Errorf("active blocker should have NodeName %q, got %q", testNodeA, blockers2[0].NodeName)
+		t.Errorf("active blocker NodeName = %q, want %q", testNodeA, blockers2[0].NodeName)
 	}
 }
 
-func TestBuildBlockers_NilStallCheckerTreatsAsNotStalled(t *testing.T) {
-	// When isDrainStalled is nil, PDB should only show as risk (safe default)
+func TestBuildBlockers_NilStallCheckerShowsNothing(t *testing.T) {
+	// When isDrainStalled is nil, PDB should not appear (safe default — no
+	// stall detected means no active blocker)
 	appLabels := map[string]string{"app": "web"}
 
 	pdbStore := []interface{}{
@@ -498,14 +470,92 @@ func TestBuildBlockers_NilStallCheckerTreatsAsNotStalled(t *testing.T) {
 		blockerStartTimes: make(map[string]time.Time),
 	}
 
-	// Nil stall checker — should show as risk only (safe default)
 	blockers := w.BuildBlockers([]string{testNodeA}, pods, nil)
-
-	if len(blockers) != 1 {
-		t.Fatalf("expected 1 blocker (risk), got %d", len(blockers))
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers with nil stall checker, got %d", len(blockers))
 	}
-	if blockers[0].Tier != types.BlockerTierRisk {
-		t.Errorf("expected risk tier with nil stall checker, got %v", blockers[0].Tier)
+}
+
+func TestWillBlockDrain(t *testing.T) {
+	tests := []struct {
+		name           string
+		desiredHealthy int32
+		expectedPods   int32
+		want           bool
+	}{
+		{"minAvailable equals replicas — will block", 3, 3, true},
+		{"single pod PDB — will block", 1, 1, true},
+		{"has room for eviction — won't block", 2, 3, false},
+		{"zero expected pods — won't block", 0, 0, false},
+		{"desired exceeds expected — will block", 4, 3, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pdb := &policyv1.PodDisruptionBudget{
+				Status: policyv1.PodDisruptionBudgetStatus{
+					DesiredHealthy: tt.desiredHealthy,
+					ExpectedPods:   tt.expectedPods,
+				},
+			}
+			if got := willBlockDrain(pdb); got != tt.want {
+				t.Errorf("willBlockDrain() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPreFlightBlockers(t *testing.T) {
+	pdbStore := []interface{}{
+		// Will block: minAvailable=3, 3 replicas (DesiredHealthy=3, ExpectedPods=3)
+		&policyv1.PodDisruptionBudget{
+			ObjectMeta: metav1.ObjectMeta{Name: "tight-pdb", Namespace: "app"},
+			Spec: policyv1.PodDisruptionBudgetSpec{
+				MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 3},
+			},
+			Status: policyv1.PodDisruptionBudgetStatus{
+				DesiredHealthy: 3, ExpectedPods: 3, CurrentHealthy: 3,
+			},
+		},
+		// Won't block: minAvailable=2, 3 replicas
+		&policyv1.PodDisruptionBudget{
+			ObjectMeta: metav1.ObjectMeta{Name: "fine-pdb", Namespace: "app"},
+			Spec: policyv1.PodDisruptionBudgetSpec{
+				MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 2},
+			},
+			Status: policyv1.PodDisruptionBudgetStatus{
+				DesiredHealthy: 2, ExpectedPods: 3, CurrentHealthy: 3,
+			},
+		},
+		// Will block: single-pod PDB
+		&policyv1.PodDisruptionBudget{
+			ObjectMeta: metav1.ObjectMeta{Name: "single-pdb", Namespace: "db"},
+			Spec: policyv1.PodDisruptionBudgetSpec{
+				MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 1},
+			},
+			Status: policyv1.PodDisruptionBudgetStatus{
+				DesiredHealthy: 1, ExpectedPods: 1, CurrentHealthy: 1,
+			},
+		},
+	}
+
+	w := &PDBWatcher{
+		informer: &fakeInformer{objects: pdbStore},
+	}
+
+	blockers := w.PreFlightBlockers()
+	if len(blockers) != 2 {
+		t.Fatalf("expected 2 pre-flight blockers, got %d", len(blockers))
+	}
+
+	names := map[string]bool{}
+	for _, b := range blockers {
+		names[b.Name] = true
+		if b.Tier != types.BlockerTierRisk {
+			t.Errorf("pre-flight blocker %q should be risk tier", b.Name)
+		}
+	}
+	if !names["tight-pdb"] || !names["single-pdb"] {
+		t.Errorf("expected tight-pdb and single-pdb, got %v", names)
 	}
 }
 

@@ -4,50 +4,55 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
-	"github.com/sahilm/fuzzy"
 )
 
-// renderCompactHeader renders compact header for overview screen
-func (m Model) renderCompactHeader() string {
-	title := "★ kupgrade"
-	titleDisplay := headerStyle.Render(title)
-
-	context := contextStyle.Render(m.contextName())
-
-	versionDisplay := m.renderVersionDisplay()
-
-	// Progress bar with percentage
-	progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
-	percent := fmt.Sprintf("%3d%%", m.progressPercent())
-
-	timeDisplay := timeStyle.Render(m.currentTime.Format("15:04:05"))
-
-	return fmt.Sprintf("%s  %s | %s  %s %s | %s",
-		titleDisplay, context, versionDisplay, progress, percent, timeDisplay)
-}
-
 // renderHeader renders header with screen name for sub-screens
+// Format: ⎈ kupgrade · Nodes  {cluster} | CP v1.33.6 ✓  Nodes v1.32.9 → v1.33.6  [████░░] 45%    ▸ 23m 41s
 func (m Model) renderHeader() string {
 	title := "⎈ kupgrade"
 	if screenName := m.screenName(); screenName != "" {
-		title = fmt.Sprintf("⎈ kupgrade › %s", screenName)
+		title = fmt.Sprintf("⎈ kupgrade · %s", screenName)
 	}
 	titleDisplay := headerStyle.Render(title)
 
 	context := contextStyle.Render(m.contextName())
 
-	versionDisplay := m.renderVersionDisplay()
+	current := m.currentVersion()
+	target := m.targetVersion()
+	upgradeDetected := current != "" && target != "" && versionCore(current) != versionCore(target)
 
-	progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
-	percent := fmt.Sprintf("%d%%", m.progressPercent())
+	versionPart := m.renderCPVersionDisplay(upgradeDetected)
 
-	timeDisplay := timeStyle.Render(m.currentTime.Format("15:04:05"))
+	var left string
+	if upgradeDetected {
+		progress := m.progress.ViewAs(float64(m.progressPercent()) / 100.0)
+		percent := fmt.Sprintf("%d%%", m.progressPercent())
+		left = fmt.Sprintf("%s  %s | %s  %s %s", titleDisplay, context, versionPart, progress, percent)
+	} else {
+		left = fmt.Sprintf("%s  %s | %s", titleDisplay, context, versionPart)
+	}
 
-	return fmt.Sprintf("%s  %s | %s | %s %s | %s",
-		titleDisplay, context, versionDisplay, progress, percent, timeDisplay)
+	// Right side: elapsed timer (only during upgrade)
+	var right string
+	if upgradeDetected {
+		if elapsed := m.elapsedDisplay(); elapsed != "" {
+			right = footerDescStyle.Render("▸ " + elapsed)
+		}
+	}
+
+	if right != "" {
+		spacing := m.mainWidth() - lipgloss.Width(left) - lipgloss.Width(right) - 2
+		if spacing < 2 {
+			spacing = 2
+		}
+		return left + strings.Repeat(" ", spacing) + right
+	}
+
+	return left
 }
 
 // renderVersionDisplay renders the version indicator for headers.
@@ -72,6 +77,117 @@ func (m Model) renderVersionDisplay() string {
 	return versionStyle.Render(version)
 }
 
+// renderStatusBar renders the segmented status bar.
+// [STATUS] Upgrading ... [3/11] ● Live [⎈ kupgrade]
+func (m Model) renderStatusBar(width int) string {
+	// Determine state
+	upgradeComplete := m.progressPercent() == 100 && m.totalNodes() > 0 && m.completedNodes() > 0
+	current := m.currentVersion()
+	target := m.targetVersion()
+	versionMismatch := current != "" && target != "" && versionCore(current) != versionCore(target)
+	upgradeActive := m.isUpgradeActive() || versionMismatch || m.isCPAhead()
+
+	// STATUS badge
+	var statusBadge, statusText string
+	if upgradeComplete {
+		statusBadge = sbStatusCompleteStyle.Render("STATUS")
+		statusText = sbTextStyle.Render("Complete")
+	} else if upgradeActive {
+		statusBadge = sbStatusStyle.Render("STATUS")
+		statusText = sbTextStyle.Render("Upgrading")
+	} else {
+		statusBadge = sbStatusWatchingStyle.Render("STATUS")
+		statusText = sbTextStyle.Render("Watching")
+	}
+
+	// Right segments
+	countBadge := sbCountStyle.Render(fmt.Sprintf("%d/%d", m.completedNodes(), m.totalNodes()))
+
+	liveDot := lipgloss.NewStyle().Foreground(colorSuccess).Render("●")
+	liveText := lipgloss.NewStyle().Foreground(colorText).Render(" Live")
+	clockText := lipgloss.NewStyle().Foreground(colorTextMuted).Render(" " + m.currentTime.Format("15:04:05"))
+	liveBadge := sbLiveStyle.Render(liveDot + liveText + clockText)
+
+	brandBadge := sbBrandStyle.Render("⎈ kupgrade")
+
+	left := statusBadge + statusText
+	right := countBadge + liveBadge + brandBadge
+
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 0 {
+		gap = 0
+	}
+	filler := sbFillStyle.Render(strings.Repeat(" ", gap))
+
+	return left + filler + right
+}
+
+// renderKeyHints renders the centered key hint row.
+// [0] Dashboard  [1] Nodes  [2] Drains  [3] Pods  [4] Events  [?] Help  [q] Quit
+func (m Model) renderKeyHints(width int) string {
+	hints := []struct {
+		key   string
+		label string
+	}{
+		{"0", "Dashboard"},
+		{"1", "Nodes"},
+		{"2", "Drains"},
+		{"3", "Pods"},
+		{"4", "Events"},
+		{"?", "Help"},
+		{"q", "Quit"},
+	}
+
+	var parts []string
+	for _, h := range hints {
+		badge := keyBadgeStyle.Render(h.key)
+		label := keyLabelStyle.Render(h.label)
+		parts = append(parts, badge+" "+label)
+	}
+
+	row := strings.Join(parts, "  ")
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, row)
+}
+
+// progressBar renders a colored progress bar: green filled, muted empty.
+// width = total block characters, filledCount = how many blocks are filled.
+func progressBar(width, filledCount int) string {
+	if filledCount > width {
+		filledCount = width
+	}
+	if filledCount < 0 {
+		filledCount = 0
+	}
+	empty := width - filledCount
+	bar := lipgloss.NewStyle().Foreground(colorSuccess).Render(strings.Repeat("█", filledCount))
+	bar += lipgloss.NewStyle().Foreground(colorTextMuted).Render(strings.Repeat("░", empty))
+	return bar
+}
+
+// progressBarFromPercent renders a progress bar from a percentage (0-100).
+func progressBarFromPercent(percent, width int) string {
+	filled := (percent * width) / 100
+	return progressBar(width, filled)
+}
+
+// resourceColor returns foreground color for CPU/MEM percentage thresholds.
+func resourceColor(percent int) lipgloss.Color {
+	switch {
+	case percent > 70:
+		return colorError // red
+	case percent > 50:
+		return colorWarning // yellow
+	default:
+		return colorTextMuted
+	}
+}
+
+// isUpgradeActive returns true if any nodes are in active upgrade stages.
+func (m Model) isUpgradeActive() bool {
+	counts := m.stageCounts()
+	return counts["CORDONED"]+counts["DRAINING"]+counts["REIMAGING"] > 0
+}
+
 // stageCountExcludingSurge returns the count of non-surge nodes in the given stage
 func (m Model) stageCountExcludingSurge(stage types.NodeStage) int {
 	count := 0
@@ -83,91 +199,7 @@ func (m Model) stageCountExcludingSurge(stage types.NodeStage) int {
 	return count
 }
 
-// renderPipelineRow renders compact stage counts with arrows
-func (m Model) renderPipelineRow() string {
-	stages := types.AllStages()
-	var parts []string
-
-	for i, stage := range stages {
-		count := m.stageCountExcludingSurge(stage)
-		name := string(stage)
-
-		var stageStr string
-		if i == m.selectedStage {
-			stageStr = stageStyleSelected(name).Render(name)
-		} else {
-			stageStr = stageStyle(name).Render(name)
-		}
-
-		countStr := fmt.Sprintf("%d", count)
-		if count > 0 {
-			countStr = stageStyle(name).Render(countStr)
-		} else {
-			countStr = footerDescStyle.Render(countStr)
-		}
-
-		parts = append(parts, fmt.Sprintf("%s\n%s", centerText(stageStr, 12), centerText(countStr, 12)))
-
-		if i < len(stages)-1 {
-			parts = append(parts, footerDescStyle.Render("  —  "))
-		}
-	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Center, parts...)
-}
-
-// renderFooter renders screen navigation footer with screen hints + key help
-func (m Model) renderFooter() string {
-	screenHints := []struct {
-		key  string
-		desc string
-	}{
-		{"0", "overview"},
-		{"1", "nodes"},
-		{"2", "drains"},
-		{"3", "pods"},
-		{"4", "blockers"},
-		{"5", "events"},
-	}
-
-	var parts []string
-	for _, h := range screenHints {
-		parts = append(parts, footerKeyStyle.Render(h.key)+" "+footerDescStyle.Render(h.desc))
-	}
-
-	// Append key help from bubbles
-	parts = append(parts,
-		footerKeyStyle.Render("?")+" "+footerDescStyle.Render("help"),
-		footerKeyStyle.Render("q")+" "+footerDescStyle.Render("quit"),
-	)
-
-	return footerStyle.Render(strings.Join(parts, "  "))
-}
-
-// severityIcon returns styled icon for event severity
-func (m Model) severityIcon(s types.Severity) string {
-	switch s {
-	case types.SeverityWarning:
-		return warningStyle.Render(warningIcon)
-	case types.SeverityError:
-		return errorStyle.Render(errorIcon)
-	default:
-		return infoStyle.Render(infoIcon)
-	}
-}
-
 // Helper functions
-
-// clamp constrains value between min and max
-func clamp(value, minVal, maxVal int) int {
-	if value < minVal {
-		return minVal
-	}
-	if value > maxVal {
-		return maxVal
-	}
-	return value
-}
 
 // sortedNodeNames returns all node names sorted alphabetically
 func (m Model) sortedNodeNames() []string {
@@ -190,6 +222,33 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// activeBlockers returns PDB blockers that are actively stalling a drain.
+// Only blockers promoted to active tier (drain stalled 30+ seconds) are returned.
+func (m Model) activeBlockers() []types.Blocker {
+	var active []types.Blocker
+	for _, b := range m.blockers {
+		if b.Type == types.BlockerPDB && b.Tier == types.BlockerTierActive {
+			active = append(active, b)
+		}
+	}
+	return active
+}
+
+// formatDuration formats a duration as a human-readable string (e.g., "2m 14s")
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %dm", h, m)
+}
+
 // Layout calculation helpers
 
 // mainWidth returns the width available for the main content area.
@@ -197,102 +256,72 @@ func (m Model) mainWidth() int {
 	return m.width
 }
 
-// getFilteredPodList returns pods filtered by the current pod filter mode.
-// When no upgrade is active (no CORDONED/DRAINING/REIMAGING nodes), shows all pods.
-func (m *Model) getFilteredPodList() []types.PodState {
-	affectedNodes := make(map[string]bool)
-	for _, name := range m.nodesByStage[types.StageCordoned] {
-		affectedNodes[name] = true
+// tableWidth returns the width available for table content inside a bordered panel.
+func (m Model) tableWidth() int {
+	w := m.width - 8 // outer panel border (2) + padding (2) + breathing room (4)
+	if w < 80 {
+		w = 80
 	}
-	for _, name := range m.nodesByStage[types.StageDraining] {
-		affectedNodes[name] = true
-	}
-	for _, name := range m.nodesByStage[types.StageReimaging] {
-		affectedNodes[name] = true
-	}
-
-	settledNodes := make(map[string]bool)
-	for _, name := range m.nodesByStage[types.StageComplete] {
-		settledNodes[name] = true
-	}
-
-	upgradeActive := len(affectedNodes) > 0
-
-	var podList []types.PodState
-	for _, pod := range m.pods {
-		if !upgradeActive {
-			// No upgrade in progress: show all pods regardless of filter mode
-			podList = append(podList, pod)
-			continue
-		}
-
-		switch m.podFilterMode {
-		case PodFilterDisrupting:
-			if affectedNodes[pod.NodeName] {
-				podList = append(podList, pod)
-			}
-		case PodFilterRescheduled:
-			if settledNodes[pod.NodeName] {
-				podList = append(podList, pod)
-			}
-		case PodFilterAll:
-			podList = append(podList, pod)
-		}
-	}
-
-	sort.Slice(podList, func(i, j int) bool {
-		if podList[i].NodeName != podList[j].NodeName {
-			return podList[i].NodeName < podList[j].NodeName
-		}
-		if podList[i].Namespace != podList[j].Namespace {
-			return podList[i].Namespace < podList[j].Namespace
-		}
-		return podList[i].Name < podList[j].Name
-	})
-
-	return podList
+	return w
 }
 
-// getDrainNodes returns sorted list of nodes in drain pipeline
+// columnLayout describes a table column: either fixed width or flexible (shares remaining space).
+type columnLayout struct {
+	Fixed  int // >0 means exact width; 0 means flexible
+	Weight int // relative weight among flexible columns (default 1)
+}
+
+// computeColumnWidths distributes tableWidth across columns.
+// Fixed columns get their exact width; remaining space is split by weight among flexible columns.
+// Each column width includes cell padding (2 chars).
+func computeColumnWidths(totalWidth int, cols []columnLayout) []int {
+	widths := make([]int, len(cols))
+	remaining := totalWidth
+	totalWeight := 0
+
+	for i, c := range cols {
+		if c.Fixed > 0 {
+			widths[i] = c.Fixed
+			remaining -= c.Fixed
+		} else {
+			w := c.Weight
+			if w <= 0 {
+				w = 1
+			}
+			totalWeight += w
+		}
+	}
+
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	// Distribute remaining space by weight
+	if totalWeight > 0 {
+		for i, c := range cols {
+			if c.Fixed > 0 {
+				continue
+			}
+			w := c.Weight
+			if w <= 0 {
+				w = 1
+			}
+			widths[i] = remaining * w / totalWeight
+		}
+	}
+
+	return widths
+}
+
+// getDrainNodes returns sorted list of nodes actively being drained (cordoned or draining).
+// Reimaging nodes are excluded — they have already completed the drain phase.
 func (m *Model) getDrainNodes() []string {
 	var drainNodes []string
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageCordoned]...)
 	drainNodes = append(drainNodes, m.nodesByStage[types.StageDraining]...)
-	drainNodes = append(drainNodes, m.nodesByStage[types.StageReimaging]...)
 	sort.Strings(drainNodes)
 	return drainNodes
 }
-
-// getDisplayPodList returns pods after both stage filter and fuzzy search
-func (m *Model) getDisplayPodList() []types.PodState {
-	podList := m.getFilteredPodList()
-	query := m.podSearchInput.Value()
-	if query == "" {
-		return podList
-	}
-	return fuzzyFilterPods(podList, query)
-}
-
-// fuzzyFilterPods filters pods using fuzzy matching against name, namespace, node, and status
-func fuzzyFilterPods(pods []types.PodState, query string) []types.PodState {
-	source := make(podSearchSource, len(pods))
-	for i, pod := range pods {
-		source[i] = pod.Namespace + "/" + pod.Name + " " + pod.NodeName + " " + pod.Phase
-	}
-
-	matches := fuzzy.FindFrom(query, source)
-	result := make([]types.PodState, len(matches))
-	for i, match := range matches {
-		result[i] = pods[match.Index]
-	}
-	return result
-}
-
-// podSearchSource implements fuzzy.Source for pod searching
-type podSearchSource []string
-
-func (s podSearchSource) String(i int) string { return s[i] }
-func (s podSearchSource) Len() int            { return len(s) }
 
 // clearPodSearch resets the pod search state
 func (m *Model) clearPodSearch() {

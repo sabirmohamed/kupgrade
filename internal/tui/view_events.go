@@ -4,263 +4,381 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
-// renderEventsScreen renders the full events log screen
+// Event table column indices
+const (
+	evColTime    = 0
+	evColSev     = 1
+	evColReason  = 2
+	evColTarget  = 3
+	evColMessage = 4
+)
+
+// renderEventsScreen renders the full events screen
 func (m Model) renderEventsScreen() string {
+	w := m.mainWidth()
+
+	counts := m.stageCounts()
+	tabBar := m.renderTabBar(counts)
+
 	var b strings.Builder
 	b.WriteString(m.renderHeader())
-	b.WriteString("\n")
-
-	b.WriteString(m.renderEventFilterBar())
 	b.WriteString("\n\n")
 
-	events := m.filteredEvents()
-
-	if len(events) == 0 {
-		b.WriteString(m.renderEmptyEventsMessage())
-	} else if m.eventAggregated {
-		b.WriteString(m.renderAggregatedEventsList(events))
-	} else {
-		b.WriteString(m.renderRawEventsList(events))
-	}
-
-	b.WriteString("\n")
-	b.WriteString(m.renderEventsFooter())
-
-	return m.placeContent(b.String())
-}
-
-// renderEmptyEventsMessage returns the message to display when no events match the filter
-func (m Model) renderEmptyEventsMessage() string {
-	if m.eventFilter == EventFilterAll {
-		return footerDescStyle.Render("  Waiting for events...")
-	}
-	return footerDescStyle.Render(fmt.Sprintf("  No %s events", strings.ToLower(m.eventFilterName())))
-}
-
-// renderAggregatedEventsList renders events grouped by reason
-func (m Model) renderAggregatedEventsList(events []types.Event) string {
-	var b strings.Builder
+	events := m.sortedEvents()
 	aggregated := aggregateEvents(events)
 
-	for i, ag := range aggregated {
-		b.WriteString(m.renderAggregatedEventRow(i, ag))
-		b.WriteString(m.renderExpandedEventsOrHint(i, ag, events))
+	if len(aggregated) == 0 {
+		b.WriteString(footerDescStyle.Render("  Waiting for events..."))
+	} else {
+		b.WriteString(m.renderEventsTable(aggregated, events))
 	}
 
-	return b.String()
+	panelBody := b.String()
+
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSelected).
+		Padding(0, 1).
+		Width(w - 2).
+		Render(panelBody)
+
+	statusBar := m.renderStatusBar(w)
+	keyHints := m.renderKeyHints(w)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel, statusBar, keyHints)
+	return m.placeContent(content)
 }
 
-// renderAggregatedEventRow renders a single aggregated event row
-func (m Model) renderAggregatedEventRow(index int, ag AggregatedEvent) string {
-	cursor := "  "
-	if index == m.listIndex {
-		cursor = "► "
+// renderEventsTable renders the aggregated events as a lipgloss/table.
+// m.listIndex is a visual row index (spanning both group headers and expanded sub-rows).
+func (m Model) renderEventsTable(aggregated []AggregatedEvent, allEvents []types.Event) string {
+	colWidths := computeColumnWidths(m.tableWidth(), []columnLayout{
+		{Fixed: 10}, // TIME
+		{Fixed: 5},  // SEV
+		{Fixed: 20}, // REASON
+		{Weight: 3}, // TARGET — flexible, ~37% of remaining
+		{Weight: 5}, // MESSAGE — flexible, ~63% of remaining
+	})
+
+	// Dynamic message truncation based on available column width (minus cell padding)
+	msgMaxLen := colWidths[evColMessage] - 4
+	if msgMaxLen < 40 {
+		msgMaxLen = 40
 	}
 
-	ts := timestampStyle.Render(ag.Timestamp.Format("15:04:05"))
-	icon := m.severityIcon(ag.Severity)
+	var rows [][]string
+	var rowSeverities []types.Severity // parallel slice for styling
+	var rowIsExpanded []bool           // parallel slice: is this an expanded sub-row?
 
-	expandIcon := "▸"
-	if m.expandedGroup == ag.Reason {
-		expandIcon = "▾"
+	for _, ag := range aggregated {
+		rows = append(rows, buildEventRow(ag, msgMaxLen))
+		rowSeverities = append(rowSeverities, ag.Severity)
+		rowIsExpanded = append(rowIsExpanded, false)
+
+		// If this group is expanded, add individual event rows
+		if ag.Count > 1 && m.expandedGroup == ag.Reason {
+			for _, e := range allEvents {
+				if eventAggregationKey(e) != ag.Reason {
+					continue
+				}
+				rows = append(rows, buildExpandedEventRow(e, msgMaxLen))
+				rowSeverities = append(rowSeverities, e.Severity)
+				rowIsExpanded = append(rowIsExpanded, true)
+			}
+		}
 	}
 
-	var line string
+	// m.listIndex is the visual row index directly
+	selectedVisualRow := m.listIndex
+	if selectedVisualRow >= len(rows) {
+		selectedVisualRow = len(rows) - 1
+	}
+
+	totalRows := len(rows)
+	// Overhead: tabBar(1) + panel borders(2) + header(1) + blank(1) +
+	// table header+border(2) + hint(1) + statusBar(1) + keyHints(1) + buffer(2) = 12
+	visibleRows := m.height - 12
+	if visibleRows < 5 {
+		visibleRows = 5
+	}
+
+	t := table.New().
+		Headers("TIME", "SEV", "REASON", "TARGET", "MESSAGE").
+		Rows(rows...).
+		Width(m.tableWidth()).
+		Border(lipgloss.RoundedBorder()).
+		BorderColumn(false).
+		BorderRow(false).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderHeader(true).
+		BorderStyle(tableBorderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := m.eventCellStyle(row, col, selectedVisualRow, rowSeverities, rowIsExpanded)
+			if col < len(colWidths) {
+				s = s.Width(colWidths[col])
+			}
+			return s
+		})
+
+	// Always constrain height for consistent layout (prevents header/footer flicker)
+	scrollOffset := calcScrollOffset(selectedVisualRow, visibleRows, totalRows)
+	t = t.Height(visibleRows).Offset(scrollOffset)
+
+	rendered := t.String()
+
+	// Footer hint
+	var hint string
+	if totalRows > visibleRows {
+		hint = fmt.Sprintf(" %d/%d  •  d describe  •  e expand group", m.listIndex+1, totalRows)
+	} else {
+		hint = fmt.Sprintf(" %d events  •  d describe  •  e expand group", len(allEvents))
+	}
+	rendered += "\n" + footerDescStyle.Render(hint)
+
+	return rendered
+}
+
+// buildEventRow builds a table row for an aggregated event.
+// msgMaxLen is the dynamic message truncation length based on column width.
+func buildEventRow(ag AggregatedEvent, msgMaxLen int) []string {
+	ts := ag.Timestamp.Format("15:04:05")
+	icon := severityIcon(ag.Severity)
+	reason := ag.Reason
+	target := extractTarget(ag)
+
+	// Strip redundant [Reason] prefix since REASON column already shows it
+	cleanMsg := truncateString(stripBracketPrefix(ag.SampleEvent.Message), msgMaxLen)
+
+	var msg string
 	if ag.Count > 1 {
-		line = fmt.Sprintf("%s%s %s %s %s", cursor, ts, icon, expandIcon, ag.Format(icon))
+		countStr := eventCountStyle.Render(fmt.Sprintf("×%d", ag.Count))
+		msg = countStr + "  " + cleanMsg
 	} else {
-		line = fmt.Sprintf("%s%s %s   %s", cursor, ts, icon, ag.Format(icon))
+		msg = cleanMsg
 	}
 
-	return line + "\n"
+	return []string{ts, icon, reason, target, msg}
 }
 
-// renderExpandedEventsOrHint renders expanded event details or the expand hint
-func (m Model) renderExpandedEventsOrHint(index int, ag AggregatedEvent, events []types.Event) string {
-	if ag.Count <= 1 {
-		return ""
+// buildExpandedEventRow builds a sub-row for an individual event within an expanded group.
+func buildExpandedEventRow(e types.Event, msgMaxLen int) []string {
+	ts := e.Timestamp.Format("15:04:05")
+	target := e.NodeName
+	if target == "" {
+		target = e.PodName
 	}
-
-	if m.expandedGroup == ag.Reason {
-		return m.renderExpandedEvents(ag.Reason, events)
+	if target == "" {
+		target = "-"
 	}
-
-	if index == m.listIndex {
-		return footerDescStyle.Render("       (press 'e' to expand)") + "\n"
-	}
-
-	return ""
+	// Strip redundant [Reason] prefix — REASON is shown in the group header
+	msg := truncateString(stripBracketPrefix(e.Message), msgMaxLen)
+	return []string{ts, " ", "", target, msg}
 }
 
-// renderExpandedEvents renders the individual events within an expanded group
-func (m Model) renderExpandedEvents(reason string, events []types.Event) string {
-	var b strings.Builder
-
-	msgWidth := m.mainWidth() - 45
-	if msgWidth < 40 {
-		msgWidth = 40
+// severityIcon returns the icon string for a severity level (unstyled)
+func severityIcon(s types.Severity) string {
+	switch s {
+	case types.SeverityError:
+		return errorIcon
+	case types.SeverityWarning:
+		return warningIcon
+	default:
+		return infoIcon
 	}
-
-	for _, e := range events {
-		if extractReason(e.Message) != reason {
-			continue
-		}
-
-		subTs := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
-		subIcon := m.severityIcon(e.Severity)
-		nodeName := e.NodeName
-		if nodeName == "" {
-			nodeName = "-"
-		}
-
-		subLine := fmt.Sprintf("       %s %s %-12s %s",
-			subTs, subIcon, nodeName, truncateMessage(e.Message, msgWidth))
-		b.WriteString(footerDescStyle.Render(subLine))
-		b.WriteString("\n")
-	}
-
-	return b.String()
 }
 
-// renderRawEventsList renders events in raw (non-aggregated) format
-func (m Model) renderRawEventsList(events []types.Event) string {
-	var b strings.Builder
-
-	for i, e := range events {
-		cursor := "  "
-		if i == m.listIndex {
-			cursor = "► "
+// extractTarget extracts the primary target name from an aggregated event.
+// When a group spans multiple distinct targets, shows "(N targets)" instead of
+// a single misleading sample name.
+func extractTarget(ag AggregatedEvent) string {
+	if len(ag.Resources) > 1 {
+		// Use context-aware label: "nodes" for node events, "targets" otherwise
+		label := "targets"
+		if ag.SampleEvent.NodeName != "" && ag.SampleEvent.PodName == "" {
+			label = "nodes"
 		}
-
-		ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
-		icon := m.severityIcon(e.Severity)
-		nodeName := e.NodeName
-		if nodeName == "" {
-			nodeName = "-"
-		}
-
-		line := fmt.Sprintf("%s%s %s %-15s %s",
-			cursor, ts, icon, nodeName, e.Message)
-
-		b.WriteString(line)
-		b.WriteString("\n")
+		return fmt.Sprintf("(%d %s)", len(ag.Resources), label)
 	}
-
-	return b.String()
+	e := ag.SampleEvent
+	if e.NodeName != "" {
+		return e.NodeName
+	}
+	if e.PodName != "" {
+		return e.PodName
+	}
+	if len(ag.Resources) == 1 {
+		return ag.Resources[0]
+	}
+	return "-"
 }
 
-// renderEventFilterBar renders the filter toggle bar
-func (m Model) renderEventFilterBar() string {
-	upgradeStyle := footerDescStyle
-	warningsStyle := footerDescStyle
-	allStyle := footerDescStyle
+// eventCellStyle computes the style for a cell in the events table
+func (m Model) eventCellStyle(row, col, selectedVisualRow int, rowSeverities []types.Severity, rowIsExpanded []bool) lipgloss.Style {
+	style := lipgloss.NewStyle().Padding(0, 1)
 
-	// Highlight the active filter
-	switch m.eventFilter {
-	case EventFilterUpgrade:
-		upgradeStyle = footerKeyStyle
-	case EventFilterWarnings:
-		warningsStyle = footerKeyStyle
-	case EventFilterAll:
-		allStyle = footerKeyStyle
+	if row == table.HeaderRow {
+		return style.Foreground(colorTextMuted).Bold(true)
 	}
 
-	// Aggregation indicator
-	aggLabel := "Raw"
-	aggStyle := footerDescStyle
-	if m.eventAggregated {
-		aggLabel = "Grouped"
-		aggStyle = footerKeyStyle
+	if row >= len(rowSeverities) {
+		return style
 	}
 
-	if m.eventAggregated {
-		return fmt.Sprintf("  %s %s  %s %s  %s %s  │  %s %s  %s expand",
-			footerKeyStyle.Render("[u]"), upgradeStyle.Render("Upgrade"),
-			footerKeyStyle.Render("[w]"), warningsStyle.Render("Warnings"),
-			footerKeyStyle.Render("[a]"), allStyle.Render("All"),
-			footerKeyStyle.Render("[g]"), aggStyle.Render(aggLabel),
-			footerKeyStyle.Render("[e]"))
+	severity := rowSeverities[row]
+	isExpanded := rowIsExpanded[row]
+
+	// Selected row (using visual row index, not group index)
+	if row == selectedVisualRow {
+		style = style.Background(colorSelected).Foreground(colorTextBold)
+		return style
 	}
-	return fmt.Sprintf("  %s %s  %s %s  %s %s  │  %s %s",
-		footerKeyStyle.Render("[u]"), upgradeStyle.Render("Upgrade"),
-		footerKeyStyle.Render("[w]"), warningsStyle.Render("Warnings"),
-		footerKeyStyle.Render("[a]"), allStyle.Render("All"),
-		footerKeyStyle.Render("[g]"), aggStyle.Render(aggLabel))
+
+	// Expanded sub-rows are dimmed
+	if isExpanded {
+		style = style.Foreground(colorTextDim)
+		if col == evColSev {
+			return style
+		}
+		return style
+	}
+
+	// Column-specific styling
+	switch col {
+	case evColTime:
+		style = style.Foreground(colorTextDim)
+	case evColSev:
+		switch severity {
+		case types.SeverityError:
+			style = style.Foreground(colorError)
+		case types.SeverityWarning:
+			style = style.Foreground(colorWarning)
+		default:
+			style = style.Foreground(colorInfo)
+		}
+	case evColReason:
+		switch severity {
+		case types.SeverityError:
+			style = style.Foreground(colorError).Bold(true)
+		case types.SeverityWarning:
+			style = style.Foreground(colorWarning)
+		default:
+			style = style.Foreground(colorTextMuted)
+		}
+	case evColTarget:
+		style = style.Foreground(colorTextBold)
+	case evColMessage:
+		style = style.Foreground(colorText)
+	}
+
+	return style
 }
 
-// renderEventsFooter renders footer with event-specific hints
-func (m Model) renderEventsFooter() string {
-	events := m.filteredEvents()
-	var countInfo string
-	if m.eventAggregated {
-		aggregated := aggregateEvents(events)
-		countInfo = fmt.Sprintf("%d groups from %d events", len(aggregated), len(events))
-	} else {
-		countInfo = fmt.Sprintf("Showing %d of %d events", len(events), len(m.events))
+// eventVisualRowCount returns the total number of visual rows in the events table,
+// including expanded sub-rows.
+func (m Model) eventVisualRowCount() int {
+	events := m.sortedEvents()
+	aggregated := aggregateEvents(events)
+	count := len(aggregated)
+	for _, ag := range aggregated {
+		if ag.Count > 1 && m.expandedGroup == ag.Reason {
+			count += ag.Count
+		}
 	}
-	return footerDescStyle.Render("  " + countInfo + "  •  ↑↓ navigate  •  d describe  •  q back")
+	return count
 }
 
-// truncateMessage smartly truncates a message, preserving important parts
-// Keeps: [Reason] prefix, shortened resource name, error type at end
-func truncateMessage(msg string, maxLen int) string {
-	if len(msg) <= maxLen {
-		return msg
-	}
-
-	// Try to find the error description after the last colon
-	lastColon := strings.LastIndex(msg, ": ")
-	if lastColon > 0 && lastColon < len(msg)-2 {
-		prefix := msg[:lastColon]
-		suffix := msg[lastColon+2:]
-
-		// Shorten the prefix (resource name), keep the suffix (error)
-		availableForPrefix := maxLen - len(suffix) - 5 // 5 for ": " and "..."
-		if availableForPrefix > 20 && len(suffix) < maxLen/2 {
-			// Shorten prefix, keep full suffix
-			shortPrefix := shortenResourceName(prefix, availableForPrefix)
-			return shortPrefix + ": " + suffix
+// eventGroupForVisualRow maps a visual row index to the aggregated group index.
+// Returns the group index and whether the row is an expanded sub-row (not the header).
+func (m Model) eventGroupForVisualRow(visualRow int, aggregated []AggregatedEvent, allEvents []types.Event) (groupIdx int, isSubRow bool) {
+	currentRow := 0
+	for i, ag := range aggregated {
+		if currentRow == visualRow {
+			return i, false
+		}
+		currentRow++
+		if ag.Count > 1 && m.expandedGroup == ag.Reason {
+			subCount := 0
+			for _, e := range allEvents {
+				if eventAggregationKey(e) == ag.Reason {
+					subCount++
+				}
+			}
+			if visualRow < currentRow+subCount {
+				return i, true
+			}
+			currentRow += subCount
 		}
 	}
-
-	// Fallback: truncate end but try to end at word boundary
-	if maxLen > 10 {
-		truncated := msg[:maxLen-3]
-		// Find last space to break at word
-		if lastSpace := strings.LastIndex(truncated, " "); lastSpace > maxLen/2 {
-			return truncated[:lastSpace] + "..."
-		}
-		return truncated + "..."
+	// Fallback: last group
+	if len(aggregated) > 0 {
+		return len(aggregated) - 1, false
 	}
-	return msg[:maxLen-3] + "..."
+	return 0, false
 }
 
-// shortenResourceName shortens names with hashes like "app-845849966b-flnj7" to "app-...-flnj7"
-func shortenResourceName(name string, maxLen int) string {
-	if len(name) <= maxLen {
-		return name
-	}
-
-	// Look for hash patterns (e.g., deployment-hash-podHash)
-	parts := strings.Split(name, "-")
-	if len(parts) >= 3 {
-		// Keep first and last parts, shorten middle
-		first := parts[0]
-		last := parts[len(parts)-1]
-
-		// If we have room, keep more context
-		if len(first)+len(last)+5 <= maxLen {
-			return first + "-...-" + last
+// eventAtVisualRow returns the specific event at a visual row position.
+// For group header rows, returns the group's sample event.
+// For expanded sub-rows, returns the individual event.
+func (m Model) eventAtVisualRow(visualRow int, aggregated []AggregatedEvent, allEvents []types.Event) types.Event {
+	currentRow := 0
+	for _, ag := range aggregated {
+		if currentRow == visualRow {
+			return ag.SampleEvent
+		}
+		currentRow++
+		if ag.Count > 1 && m.expandedGroup == ag.Reason {
+			for _, e := range allEvents {
+				if eventAggregationKey(e) == ag.Reason {
+					if currentRow == visualRow {
+						return e
+					}
+					currentRow++
+				}
+			}
 		}
 	}
-
-	// Simple truncation with middle ellipsis
-	if maxLen > 10 {
-		half := (maxLen - 3) / 2
-		return name[:half] + "..." + name[len(name)-half:]
+	// Fallback
+	if len(allEvents) > 0 {
+		return allEvents[len(allEvents)-1]
 	}
-	return name[:maxLen-3] + "..."
+	return types.Event{}
+}
+
+// eventGroupHeaderRow returns the visual row index of a group header.
+func eventGroupHeaderRow(groupIdx int, aggregated []AggregatedEvent, allEvents []types.Event, expandedGroup string) int {
+	currentRow := 0
+	for i, ag := range aggregated {
+		if i == groupIdx {
+			return currentRow
+		}
+		currentRow++
+		if ag.Count > 1 && expandedGroup == ag.Reason {
+			for _, e := range allEvents {
+				if eventAggregationKey(e) == ag.Reason {
+					currentRow++
+				}
+			}
+		}
+	}
+	return currentRow
+}
+
+// stripBracketPrefix removes a leading "[Reason] " prefix from a message.
+// e.g. "[Unhealthy] probe failed" → "probe failed"
+func stripBracketPrefix(msg string) string {
+	if len(msg) > 0 && msg[0] == '[' {
+		end := strings.Index(msg, "] ")
+		if end > 0 && end+2 < len(msg) {
+			return msg[end+2:]
+		}
+	}
+	return msg
 }

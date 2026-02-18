@@ -50,6 +50,7 @@ type Event struct {
 	PodName   string
 	Namespace string
 	Reason    string // K8s event reason
+	EventName string // K8s event object name (for kubectl describe)
 }
 
 // SeverityForType returns the default severity for an event type

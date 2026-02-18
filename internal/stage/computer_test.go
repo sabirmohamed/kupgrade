@@ -96,6 +96,24 @@ func TestComputeStage_Reimaging(t *testing.T) {
 			wantStage: types.StageCordoned,
 		},
 		{
+			name: "unschedulable with quarantine label returns QUARANTINED",
+			node: func() *corev1.Node {
+				n := newTestNode("node-6", testCurrentVersion, true, false)
+				n.Labels = map[string]string{"kubernetes.azure.com/upgrade-status": "Quarantined"}
+				return n
+			}(),
+			wantStage: types.StageQuarantined,
+		},
+		{
+			name: "unschedulable without quarantine label returns CORDONED",
+			node: func() *corev1.Node {
+				n := newTestNode("node-7", testCurrentVersion, true, false)
+				n.Labels = map[string]string{"kubernetes.azure.com/upgrade-status": "InProgress"}
+				return n
+			}(),
+			wantStage: types.StageCordoned,
+		},
+		{
 			name:      "not ready and unschedulable returns REIMAGING",
 			node:      newTestNode("node-5", testCurrentVersion, false, false),
 			wantStage: types.StageReimaging,

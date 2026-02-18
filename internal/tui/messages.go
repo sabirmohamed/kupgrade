@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/sabirmohamed/kupgrade/pkg/types"
+import (
+	"github.com/sabirmohamed/kupgrade/internal/kube"
+	"github.com/sabirmohamed/kupgrade/pkg/types"
+)
 
 // EventMsg wraps an event for the TUI
 type EventMsg struct {
@@ -36,3 +39,17 @@ type DescribeMsg struct {
 
 // TickMsg triggers periodic updates
 type TickMsg struct{}
+
+// NodeMetricsMsg carries node CPU/memory metrics from the metrics-server
+type NodeMetricsMsg map[string]kube.NodeMetrics
+
+// metricsRefreshMsg triggers the next metrics fetch cycle
+type metricsRefreshMsg struct{}
+
+// cpVersionMsg carries the polled control plane version
+type cpVersionMsg struct {
+	Version string
+}
+
+// cpVersionCheckMsg triggers the next CP version poll
+type cpVersionCheckMsg struct{}

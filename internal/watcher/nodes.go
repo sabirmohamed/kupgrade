@@ -66,8 +66,13 @@ type NodeWatcher struct {
 	evictablePodCounter func(nodeName string) int // Non-DaemonSet pods (for drain progress)
 	onStageChangeFunc   func()                    // Called when any node's stage changes
 
-	mu         sync.RWMutex              // Guards lifecycles map (single lock for all per-node state)
+	mu         sync.RWMutex              // Guards lifecycles map and platform
 	lifecycles map[string]*NodeLifecycle // THE single map — replaces 7 independent maps
+	platform   types.Platform            // Detected from first node's providerID
+
+	// Surge promotion: tracks completion stability for surge → COMPLETE transition
+	completionStableAt time.Time // When isUpgradeComplete() first returned true
+	surgePromoted      bool      // Set after promoteSurgeNodes() runs
 }
 
 // NewNodeWatcher creates a new node watcher
@@ -200,6 +205,15 @@ func (w *NodeWatcher) onAdd(obj interface{}) {
 	// Update target if this node has higher version
 	w.stages.SetTargetVersion(nodeVersion)
 
+	// Detect platform from first node with a providerID
+	w.mu.Lock()
+	if w.platform == types.PlatformUnknown {
+		if providerID := node.Spec.ProviderID; providerID != "" {
+			w.platform = types.DetectPlatform(providerID)
+		}
+	}
+	w.mu.Unlock()
+
 	// Check lifecycle state: reimaging return? surge node?
 	w.mu.Lock()
 	lc := w.lifecycles[node.Name]
@@ -284,6 +298,9 @@ func (w *NodeWatcher) onAdd(obj interface{}) {
 		versionMismatch := lowestVersion != "" && targetVersion != "" && lowestVersion != targetVersion
 		if nodeVersion == targetVersion && versionMismatch {
 			addLc.IsSurge = true
+			// Reset promotion state — new surge means upgrade still active
+			w.surgePromoted = false
+			w.completionStableAt = time.Time{}
 		}
 	}
 	w.mu.Unlock()
@@ -385,32 +402,58 @@ func (w *NodeWatcher) onDelete(obj interface{}) {
 		})
 	}
 
-	// If an upgrade is active AND this is NOT a surge node, retain as REIMAGING (ghost node).
+	// If an upgrade is active AND this is NOT a surge node, handle deletion.
 	// Surge nodes are temporary — they don't reimage, they just get removed.
 	// Double-delete protection: if node already completed upgrade, don't create ghost.
 	if w.isUpgradeActive() && !wasSurge && !wasCompleted {
-		ghostState := w.buildState(node)
-		ghostState.Stage = types.StageReimaging
-		ghostState.Deleted = false
+		// Single branching point for provider-specific behavior (Forbidden Practice #10):
+		// AKS reimages nodes in-place (same name re-registers), EKS/GKE replace
+		// with new nodes (deletions are terminal).
+		w.mu.RLock()
+		nodeReregisters := w.platform.NodeReregisters()
+		w.mu.RUnlock()
 
-		// Use PreUpgradeVersion for ghost (fixes wrong version bug).
-		// AKS Pattern A flips kubeletVersion to target before deletion,
-		// so buildState captures the wrong (target) version.
-		if preUpgradeVersion != "" {
-			ghostState.Version = preUpgradeVersion
+		if nodeReregisters {
+			// AKS path: retain as REIMAGING ghost, await re-registration
+			ghostState := w.buildState(node)
+			ghostState.Stage = types.StageReimaging
+			ghostState.Deleted = false
+
+			// Use PreUpgradeVersion for ghost (fixes wrong version bug).
+			// AKS Pattern A flips kubeletVersion to target before deletion,
+			// so buildState captures the wrong (target) version.
+			if preUpgradeVersion != "" {
+				ghostState.Version = preUpgradeVersion
+			}
+
+			w.mu.Lock()
+			ghostLc := w.getOrCreateLifecycle(node.Name)
+			ghostLc.Reimaging = true
+			ghostLc.WasReimaged = true // Survives TTL cleanup — prevents false surge on re-register
+			ghostLc.ReimageStartTime = time.Now()
+			ghostLc.GhostState = &ghostState
+			ghostLc.Completed = false // Clear latch — node is reimaging
+			ghostLc.clearDrain()
+			w.mu.Unlock()
+
+			w.emitter.EmitNodeState(ghostState)
+		} else {
+			// EKS/GKE path: terminal delete — node will never re-register.
+			// Mark COMPLETE so TUI keeps it visible for progress tracking.
+			w.mu.Lock()
+			terminalLc := w.getOrCreateLifecycle(node.Name)
+			terminalLc.Completed = true
+			terminalLc.CompletedAt = time.Now()
+			terminalLc.clearDrain()
+			w.mu.Unlock()
+
+			w.emitter.EmitNodeState(types.NodeState{
+				Name:    node.Name,
+				Stage:   types.StageComplete,
+				Version: preUpgradeVersion,
+				Deleted: true,
+			})
 		}
-
-		w.mu.Lock()
-		ghostLc := w.getOrCreateLifecycle(node.Name)
-		ghostLc.Reimaging = true
-		ghostLc.WasReimaged = true // Survives TTL cleanup — prevents false surge on re-register
-		ghostLc.ReimageStartTime = time.Now()
-		ghostLc.GhostState = &ghostState
-		ghostLc.Completed = false // Clear latch — node is reimaging
-		ghostLc.clearDrain()
-		w.mu.Unlock()
-
-		w.emitter.EmitNodeState(ghostState)
 	} else {
 		// No upgrade active or surge node — normal deletion
 		w.emitter.EmitNodeState(types.NodeState{
@@ -495,6 +538,8 @@ func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
 		drainProgress = (evicted * 100) / initialEvictable
 	}
 
+	pool, poolMode := extractPoolInfo(node)
+
 	return types.NodeState{
 		Name:              node.Name,
 		Stage:             stage,
@@ -503,6 +548,9 @@ func (w *NodeWatcher) buildState(node *corev1.Node) types.NodeState {
 		Schedulable:       !node.Spec.Unschedulable,
 		PodCount:          podCount,
 		EvictablePodCount: evictableCount,
+		Pool:              pool,
+		PoolMode:          poolMode,
+		ProviderID:        node.Spec.ProviderID,
 		Conditions:        extractConditions(node),
 		Taints:            extractTaints(node),
 		Age:               formatAge(node.CreationTimestamp.Time),
@@ -554,7 +602,7 @@ func (w *NodeWatcher) hasUpgradeSignals() bool {
 			continue
 		}
 		stage := w.stages.ComputeStage(node)
-		if stage == types.StageCordoned || stage == types.StageDraining || stage == types.StageReimaging {
+		if stage == types.StageCordoned || stage == types.StageDraining || stage == types.StageQuarantined || stage == types.StageReimaging {
 			return true
 		}
 	}
@@ -586,11 +634,17 @@ func (w *NodeWatcher) isUpgradeActive() bool {
 
 // CleanupExpiredGhosts removes ghost nodes that have exceeded the TTL.
 // Called periodically to prevent orphaned ghosts from accumulating.
+// Uses shorter TTL on EKS/GKE where ghosts are defense-in-depth only
+// (terminal deletions should be handled by onDelete, not ghost mechanism).
 func (w *NodeWatcher) CleanupExpiredGhosts() {
 	w.mu.Lock()
+	ttl := GhostTTL
+	if !w.platform.NodeReregisters() && w.platform != types.PlatformUnknown {
+		ttl = 30 * time.Second // Defense-in-depth: EKS/GKE ghosts shouldn't exist
+	}
 	var expired []string
 	for name, lc := range w.lifecycles {
-		if lc.Reimaging && time.Since(lc.ReimageStartTime) > GhostTTL {
+		if lc.Reimaging && time.Since(lc.ReimageStartTime) > ttl {
 			expired = append(expired, name)
 		}
 	}
@@ -613,6 +667,157 @@ func (w *NodeWatcher) CleanupExpiredGhosts() {
 			Timestamp: time.Now(),
 			Message:   fmt.Sprintf("Ghost node %s expired (no re-registration within %v)", name, GhostTTL),
 			NodeName:  name,
+		})
+	}
+}
+
+// completionStabilityPeriod is how long isUpgradeComplete() must remain true
+// before surge nodes are promoted. Prevents premature promotion during
+// rolling upgrades where nodes briefly appear at target version.
+const completionStabilityPeriod = 60 * time.Second
+
+// isUpgradeComplete returns true when the upgrade appears fully done:
+// - Target version exists
+// - No reimaging ghosts active
+// - At least one completed/reimaged node (evidence upgrade happened)
+// - All live nodes at target version and schedulable
+// Caller must NOT hold mu.
+func (w *NodeWatcher) isUpgradeComplete() bool {
+	targetVersion := w.stages.TargetVersion()
+	if targetVersion == "" {
+		return false
+	}
+
+	w.mu.RLock()
+	// Check for active ghosts
+	for _, lc := range w.lifecycles {
+		if lc.Reimaging {
+			w.mu.RUnlock()
+			return false
+		}
+	}
+
+	// Check for evidence of upgrade (at least one completed/reimaged node)
+	hasEvidence := false
+	for _, lc := range w.lifecycles {
+		if lc.Completed || lc.WasReimaged {
+			hasEvidence = true
+			break
+		}
+	}
+	w.mu.RUnlock()
+
+	if !hasEvidence {
+		return false
+	}
+
+	// All live nodes must be at target version and schedulable
+	for _, obj := range w.informer.GetStore().List() {
+		node, ok := obj.(*corev1.Node)
+		if !ok {
+			continue
+		}
+		if node.Status.NodeInfo.KubeletVersion != targetVersion {
+			return false
+		}
+		if node.Spec.Unschedulable {
+			return false
+		}
+	}
+
+	return true
+}
+
+// CheckUpgradeCompletion checks if the upgrade is complete and promotes
+// surge nodes after a stability period. Called from Manager periodic loop.
+func (w *NodeWatcher) CheckUpgradeCompletion() {
+	if w.surgePromoted {
+		return
+	}
+
+	if w.isUpgradeComplete() {
+		if w.completionStableAt.IsZero() {
+			w.completionStableAt = time.Now()
+			return
+		}
+		if time.Since(w.completionStableAt) >= completionStabilityPeriod {
+			w.promoteSurgeNodes()
+		}
+	} else {
+		// Reset timer if upgrade is no longer complete
+		w.completionStableAt = time.Time{}
+	}
+}
+
+// promoteSurgeNodes clears surge flags and marks surge nodes as COMPLETE.
+// Called once after the upgrade has been stable for completionStabilityPeriod.
+func (w *NodeWatcher) promoteSurgeNodes() {
+	w.mu.Lock()
+	var promoted []string
+	for name, lc := range w.lifecycles {
+		if lc.IsSurge {
+			lc.IsSurge = false
+			lc.SurgeConfirmedByEvent = false
+			lc.Completed = true
+			lc.CompletedAt = time.Now()
+			promoted = append(promoted, name)
+		}
+	}
+	w.surgePromoted = true
+	w.mu.Unlock()
+
+	// Re-emit node states so TUI updates (surge flag cleared, stage → COMPLETE)
+	for _, name := range promoted {
+		for _, obj := range w.informer.GetStore().List() {
+			node, ok := obj.(*corev1.Node)
+			if !ok {
+				continue
+			}
+			if node.Name == name {
+				state := w.buildState(node)
+				w.applyLifecycleFlags(&state)
+				w.emitter.EmitNodeState(state)
+				break
+			}
+		}
+	}
+
+	// Clean up deleted-complete nodes (EKS/GKE terminal deletions kept for
+	// progress tracking). Now that surge is promoted, upgrade is truly done —
+	// emit plain deletions so TUI removes these stale entries.
+	w.mu.RLock()
+	var deletedComplete []string
+	for name, lc := range w.lifecycles {
+		if lc.Completed && !lc.Reimaging && !lc.WasReimaged {
+			// Check if this node is actually gone from the cluster (terminal delete).
+			// Live nodes (including just-promoted surge) are still in the informer store.
+			found := false
+			for _, obj := range w.informer.GetStore().List() {
+				if n, ok := obj.(*corev1.Node); ok && n.Name == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				deletedComplete = append(deletedComplete, name)
+			}
+		}
+	}
+	w.mu.RUnlock()
+
+	for _, name := range deletedComplete {
+		w.emitter.EmitNodeState(types.NodeState{
+			Name:    name,
+			Deleted: true,
+		})
+	}
+
+	if len(promoted) > 0 {
+		w.emitter.Emit(types.Event{
+			Type:      types.EventNodeReady,
+			Severity:  types.SeverityInfo,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("Upgrade complete — %d surge node(s) promoted", len(promoted)),
 		})
 	}
 }

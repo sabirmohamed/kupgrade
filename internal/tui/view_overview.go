@@ -2,332 +2,781 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
-// renderOverview renders the main overview screen
+// renderOverview renders the dashboard screen matching the final mockup.
+// Layout: tab bar → outer panel (header, platform, dialog, table, cards) → status bar → key hints.
 func (m Model) renderOverview() string {
-	var b strings.Builder
-
-	// Header → Pipeline → Blockers → Drain → Node List → Events → Footer
-	b.WriteString(m.renderCompactHeader())
-	b.WriteString("\n\n")
-	b.WriteString(m.renderPipelineRow())
-	b.WriteString("\n")
-
-	// Blockers section (only if blockers exist)
-	if len(m.blockers) > 0 {
-		b.WriteString(m.renderBlockersSection())
-		b.WriteString("\n")
-	}
-
-	// Drain progress section (only if node is draining)
-	if drainSection := m.renderDrainProgressSection(); drainSection != "" {
-		b.WriteString(drainSection)
-		b.WriteString("\n")
-	}
-
-	// Node list with stage column
-	b.WriteString(m.renderNodeList())
-	b.WriteString("\n")
-
-	// Events at bottom
-	b.WriteString(m.renderEventsSection())
-	b.WriteString("\n")
-
-	b.WriteString(m.renderFooter())
-
-	content := b.String()
-
-	// Fill available main area dimensions
 	w := m.mainWidth()
+	counts := m.stageCounts()
+
+	// Tab bar (outside the panel)
+	tabBar := m.renderTabBar(counts)
+
+	// Detect upgrade state
+	current := m.currentVersion()
+	target := m.targetVersion()
+	versionMismatch := current != "" && target != "" && versionCore(current) != versionCore(target)
+	upgradeActive := counts["CORDONED"]+counts["DRAINING"]+counts["REIMAGING"] > 0 || versionMismatch || m.isCPAhead()
+	upgradeComplete := m.progressPercent() == 100 && m.totalNodes() > 0 && counts["COMPLETE"] > 0
+
+	panelWidth := w - 6 // panel .Width(w-2) content; inner = (w-2) - padding(4) = w-6
+
+	// === Build sections above the table ===
+	var aboveParts []string
+	aboveParts = append(aboveParts, m.renderDashboardHeader(panelWidth))
+
+	if m.platform != "" {
+		poolCount := len(m.nodesByPool)
+		platformLine := lipgloss.NewStyle().Foreground(colorTextMuted).
+			Render(fmt.Sprintf("%s · %d pools", m.platform, poolCount))
+		aboveParts = append(aboveParts, platformLine)
+	}
+
+	aboveParts = append(aboveParts, m.renderPillDialog(counts, panelWidth, upgradeActive, upgradeComplete))
+
+	if !upgradeActive && !upgradeComplete {
+		aboveParts = append(aboveParts, m.renderPreFlightSection(panelWidth))
+	}
+	if upgradeComplete {
+		aboveParts = append(aboveParts, m.renderCompleteBanner())
+	}
+
+	if upgradeActive {
+		if drains := m.renderActiveDrains(); drains != "" {
+			aboveParts = append(aboveParts, drains)
+		}
+	}
+
+	// === Build sections below the table ===
+	var belowParts []string
+	if upgradeActive || upgradeComplete {
+		belowParts = append(belowParts, m.renderInfoCards(panelWidth))
+	}
+
+	// === Calculate available height for the table ===
+	aboveHeight := lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, aboveParts...))
+	belowHeight := 0
+	if len(belowParts) > 0 {
+		belowHeight = lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, belowParts...))
+	}
+
+	// Fixed chrome lines outside the panel body:
+	//   tabBar:         1
+	//   panel border:   2 (top + bottom)
+	//   panel padding:  2 (Padding(1,2) → 1 top + 1 bottom)
+	//   status bar:     1
+	//   key hints:      1
+	//   Total:          7
+	const fixedChrome = 7
+	availableForTable := m.height - fixedChrome - aboveHeight - belowHeight
+
+	// === Assemble panel body ===
+	var bodyParts []string
+	bodyParts = append(bodyParts, aboveParts...)
+
+	if m.totalNodes() > 0 {
+		bodyParts = append(bodyParts, m.renderDashboardNodeTable(panelWidth, availableForTable))
+	}
+
+	bodyParts = append(bodyParts, belowParts...)
+
+	panelBody := lipgloss.JoinVertical(lipgloss.Left, bodyParts...)
+
+	// Wrap body in bordered outer panel
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSelected).
+		Padding(1, 2).
+		Width(w - 2).
+		Render(panelBody)
+
+	// Status bar + key hints (outside panel)
+	statusBar := m.renderStatusBar(w)
+	keyHints := m.renderKeyHints(w)
+
+	// Compose: tab bar + panel + status bar + key hints
+	content := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel, statusBar, keyHints)
+
 	if w > 0 && m.height > 0 {
 		return lipgloss.Place(w, m.height, lipgloss.Left, lipgloss.Top, content)
 	}
 	return content
 }
 
-// renderBlockersSection shows blockers with left border accent.
-// Active blockers (red) are shown first, then risks (yellow).
-func (m Model) renderBlockersSection() string {
-	if len(m.blockers) == 0 {
-		return ""
+// renderDashboardHeader renders the main single-line header.
+// Format: ★ kupgrade  cluster  │  CP v1.33.6 ✓  Nodes v1.32.9 → v1.33.6  ██░░░░  40%    ▸ 5m 12s  3/5 nodes
+func (m Model) renderDashboardHeader(panelWidth int) string {
+	title := headerStyle.Render("★ kupgrade")
+	context := contextStyle.Render(m.contextName())
+	sep := lipgloss.NewStyle().Foreground(colorTextDim).Render(" │ ")
+
+	current := m.currentVersion()
+	target := m.targetVersion()
+	nodeUpgradeDetected := current != "" && target != "" && versionCore(current) != versionCore(target)
+
+	return m.renderSingleLineHeader(panelWidth, title, context, sep, nodeUpgradeDetected)
+}
+
+// shouldShowCPLine returns true when the control plane version line should be displayed.
+// Always shown when a CP version is available so users see the CP version from the start
+// and the transition when CP upgrades ahead of nodes is natural rather than jarring.
+func (m Model) shouldShowCPLine() bool {
+	return m.controlPlaneVersion != ""
+}
+
+// isCPAhead returns true when the control plane version is ahead of the lowest node version.
+func (m Model) isCPAhead() bool {
+	return m.controlPlaneVersion != "" && m.lowestVersion != "" &&
+		versionCore(m.controlPlaneVersion) != versionCore(m.lowestVersion)
+}
+
+// renderCPVersionDisplay returns the combined "CP v1.33 ✓  Nodes v1.32 → v1.33" string,
+// or just the node version display when no CP version is available.
+func (m Model) renderCPVersionDisplay(upgradeDetected bool) string {
+	if !m.shouldShowCPLine() {
+		return m.renderVersionDisplay()
+	}
+	cpVersion := m.controlPlaneVersion
+	var cpDisplay string
+	if m.cpUpgraded || (upgradeDetected && m.highestVersion != "" && versionCore(cpVersion) == versionCore(m.highestVersion)) {
+		cpDisplay = successStyle.Render("CP " + cpVersion + " ✓")
+	} else {
+		cpDisplay = versionStyle.Render("CP " + cpVersion)
+	}
+	nodeLabel := lipgloss.NewStyle().Foreground(colorTextMuted).Render("Nodes")
+	return cpDisplay + "  " + nodeLabel + " " + m.renderVersionDisplay()
+}
+
+// renderSingleLineHeader renders the single-line header with inline CP + node versions.
+func (m Model) renderSingleLineHeader(panelWidth int, title, context, sep string, upgradeDetected bool) string {
+	versionDisplay := m.renderCPVersionDisplay(upgradeDetected)
+
+	var left string
+	if upgradeDetected {
+		percent := m.progressPercent()
+		filled := (percent * headerProgressBarWidth) / 100
+		bar := progressBar(headerProgressBarWidth, filled)
+		percentStr := lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render(fmt.Sprintf("%3d%%", percent))
+		left = title + "  " + context + sep + versionDisplay + "  " + bar + " " + percentStr
+	} else {
+		left = title + "  " + context + sep + versionDisplay
 	}
 
-	activeBlockers, riskBlockers := m.splitBlockersByTier()
+	// Right side: elapsed + node count
+	var rightParts []string
+	if upgradeDetected {
+		if elapsed := m.elapsedDisplay(); elapsed != "" {
+			rightParts = append(rightParts, "▸ "+elapsed)
+		}
+		rightParts = append(rightParts, fmt.Sprintf("%d/%d nodes", m.completedNodes(), m.totalNodes()))
+	} else {
+		rightParts = append(rightParts, fmt.Sprintf("%d nodes", m.totalNodes()))
+	}
+	right := lipgloss.NewStyle().Foreground(colorTextMuted).Render(strings.Join(rightParts, "  "))
+
+	spacing := panelWidth - lipgloss.Width(left) - lipgloss.Width(right)
+	if spacing < 2 {
+		spacing = 2
+	}
+
+	return left + strings.Repeat(" ", spacing) + right
+}
+
+// renderPillDialog renders the centered stage pill dialog (hero element).
+// Purple-bordered box with stage pills, progress bar, and info line.
+func (m Model) renderPillDialog(counts map[string]int, panelWidth int, upgradeActive, upgradeComplete bool) string {
+	// Build stage pills row
+	stages := types.AllStages()
+	var pills []string
+	for _, stage := range stages {
+		count := counts[string(stage)]
+		// Hide QUARANTINED pill when count is zero — only relevant on AKS with undrainableNodeBehavior=Cordon
+		if stage == types.StageQuarantined && count == 0 {
+			continue
+		}
+		pills = append(pills, renderStagePill(string(stage), count))
+	}
+	pillsRow := strings.Join(pills, "  ")
+
+	// Dialog inner width (minus border + padding)
+	innerWidth := dialogWidth - 6 // 2 border + 4 padding (2 each side)
+
+	// Center pills
+	centeredPills := lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, pillsRow)
+
+	var dialogContent string
+	if upgradeActive || upgradeComplete {
+		// Progress bar
+		percent := m.progressPercent()
+		bar := progressBarFromPercent(percent, dialogProgressBarWidth)
+		percentStr := lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render(fmt.Sprintf(" %d%%", percent))
+		centeredBar := lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, bar+percentStr)
+
+		// Info line: elapsed + estimate (active) or completed summary (complete)
+		var infoStr string
+		if upgradeComplete {
+			elapsed := m.elapsedDisplay()
+			if elapsed == "" {
+				elapsed = "—"
+			}
+			infoStr = lipgloss.NewStyle().Foreground(colorTextMuted).Render("completed in ") +
+				lipgloss.NewStyle().Foreground(colorSuccess).Render(elapsed)
+		} else if elapsed := m.elapsedDisplay(); elapsed != "" {
+			infoStr = lipgloss.NewStyle().Foreground(colorTextMuted).Render("elapsed ") +
+				lipgloss.NewStyle().Foreground(colorSuccess).Render(elapsed)
+			if remaining := m.estimateRemaining(); remaining != "" {
+				infoStr += lipgloss.NewStyle().Foreground(colorTextMuted).Render(" · est. remaining ") +
+					lipgloss.NewStyle().Foreground(colorSuccess).Render("~"+remaining)
+			}
+		}
+		centeredInfo := lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, infoStr)
+
+		dialogContent = lipgloss.JoinVertical(lipgloss.Center,
+			centeredPills,
+			"",
+			centeredBar,
+			centeredInfo,
+		)
+	} else {
+		// Pre-flight: just pills, no progress
+		dialogContent = centeredPills
+	}
+
+	// Render dialog box
+	dialogBox := dialogBoxStyle.Render(dialogContent)
+
+	// Center dialog in whitespace area with ⎈ pattern
+	dialogHeight := lipgloss.Height(dialogBox)
+	return lipgloss.Place(
+		panelWidth,
+		dialogHeight,
+		lipgloss.Center,
+		lipgloss.Center,
+		dialogBox,
+		lipgloss.WithWhitespaceChars("⎈ "),
+		lipgloss.WithWhitespaceForeground(colorBorderDim),
+	)
+}
+
+// renderCompleteBanner renders the upgrade completion banner.
+func (m Model) renderCompleteBanner() string {
+	elapsed := m.elapsedDisplay()
+	msg := successStyle.Render("✓ All nodes upgraded")
+	if elapsed != "" {
+		msg += footerDescStyle.Render(fmt.Sprintf("  ·  Duration: %s", elapsed))
+	}
+	return msg
+}
+
+// Dashboard node table column indices (pool-grouped layout)
+const (
+	dashColName    = 0
+	dashColVersion = 1
+	dashColStage   = 2
+	dashColAge     = 3
+	dashColPods    = 4
+	dashColCPU     = 5
+	dashColMem     = 6
+)
+
+// poolSeparatorPrefix is used to detect pool separator rows in the table data.
+const poolSeparatorPrefix = "▸ "
+
+// renderDashboardNodeTable renders the node table grouped by pool.
+// panelWidth is the content width inside the outer panel.
+// availableHeight is the total terminal lines available for the table (including its own border/header).
+func (m Model) renderDashboardNodeTable(panelWidth, availableHeight int) string {
+	// Build rows grouped by pool
+	poolOrder, nodesByPool := m.sortedPoolGroups()
+
+	var rows [][]string
+	var rowNodeNames []string // parallel: node name for each row (empty for separator)
+
+	for _, pool := range poolOrder {
+		nodes := nodesByPool[pool]
+
+		// Pool separator row — show completion count during upgrade
+		completeCount := 0
+		for _, name := range nodes {
+			if n, ok := m.nodes[name]; ok && n.Stage == types.StageComplete {
+				completeCount++
+			}
+		}
+		var header string
+		if completeCount > 0 {
+			header = fmt.Sprintf("%s%s (%d nodes · %d complete)", poolSeparatorPrefix, pool, len(nodes), completeCount)
+		} else {
+			header = fmt.Sprintf("%s%s (%d nodes)", poolSeparatorPrefix, pool, len(nodes))
+		}
+		rows = append(rows, []string{header, "", "", "", "", "", ""})
+		rowNodeNames = append(rowNodeNames, "")
+
+		// Node rows
+		for _, name := range nodes {
+			node := m.nodes[name]
+			displayName := shortenNodeName(name)
+
+			// Active drain pipeline accent: prefix CORDONED + DRAINING with orange ▎
+			if node.Stage == types.StageDraining || node.Stage == types.StageCordoned {
+				accentColor := colorDraining
+				if node.Stage == types.StageCordoned {
+					accentColor = colorCordoned
+				}
+				displayName = lipgloss.NewStyle().Foreground(accentColor).Render("▎") + " " + displayName
+			}
+
+			version := node.Version
+			stage := string(node.Stage)
+			if node.SurgeNode {
+				stage = "SURGE"
+			}
+
+			age := node.Age
+			if age == "" {
+				age = "-"
+			}
+
+			pods := fmt.Sprintf("%d", node.PodCount)
+
+			cpu := "—"
+			if node.CPUPercent > 0 {
+				cpu = fmt.Sprintf("%d%%", node.CPUPercent)
+			}
+
+			mem := "—"
+			if node.MemPercent > 0 {
+				mem = fmt.Sprintf("%d%%", node.MemPercent)
+			}
+
+			rows = append(rows, []string{displayName, version, stage, age, pods, cpu, mem})
+			rowNodeNames = append(rowNodeNames, name)
+		}
+	}
+
+	tableWidth := panelWidth - 3
+	if tableWidth < 80 {
+		tableWidth = 80
+	}
+
+	// Table chrome: border top(1) + header(1) + header sep(1) + border bottom(1) = 4 lines.
+	// availableHeight is the total lines for the table including chrome.
+	const tableChrome = 4
+	maxDataRows := availableHeight - tableChrome
+	if maxDataRows < 2 {
+		maxDataRows = 2
+	}
+
+	targetVer := m.targetVersion()
+
+	t := table.New().
+		Headers("NAME", "VERSION", "STAGE", "AGE", "PODS", "CPU", "MEM").
+		Rows(rows...).
+		Width(tableWidth).
+		Height(min(len(rows), maxDataRows) + tableChrome).
+		Border(lipgloss.RoundedBorder()).
+		BorderColumn(false).
+		BorderRow(false).
+		BorderHeader(true).
+		BorderStyle(lipgloss.NewStyle().Foreground(colorSelected)).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			return m.dashboardCellStyle(row, col, rowNodeNames, targetVer)
+		})
+
+	return t.String()
+}
+
+// dashboardCellStyle returns the style for a cell in the pool-grouped dashboard table.
+// Pool separator rows are detected by nodeNames[row] == "".
+func (m Model) dashboardCellStyle(row, col int, nodeNames []string, targetVer string) lipgloss.Style {
+	style := lipgloss.NewStyle().Padding(0, 1)
+
+	if row == table.HeaderRow {
+		return style.Foreground(colorTextMuted).Bold(true)
+	}
+
+	if row >= len(nodeNames) {
+		return style
+	}
+
+	// Pool separator row
+	if nodeNames[row] == "" {
+		if col == dashColName {
+			return style.Foreground(colorPurple).Bold(true)
+		}
+		return style
+	}
+
+	node, ok := m.nodes[nodeNames[row]]
+	if !ok {
+		return style
+	}
+
+	switch col {
+	case dashColName:
+		style = style.Foreground(colorText)
+	case dashColVersion:
+		if targetVer != "" && versionCore(node.Version) == versionCore(targetVer) {
+			style = style.Foreground(colorTextBold).Bold(true)
+		} else {
+			style = style.Foreground(colorTextMuted)
+		}
+	case dashColStage:
+		stage := string(node.Stage)
+		if node.SurgeNode {
+			stage = "SURGE"
+		}
+		if fg, exists := stageForegroundColors[stage]; exists {
+			style = style.Foreground(fg).Bold(true)
+		}
+	case dashColAge:
+		style = style.Foreground(colorTextDim)
+	case dashColPods:
+		style = style.Foreground(colorText)
+	case dashColCPU:
+		if node.CPUPercent > 0 {
+			style = style.Foreground(resourceColor(node.CPUPercent))
+		} else {
+			style = style.Foreground(colorTextDim)
+		}
+	case dashColMem:
+		if node.MemPercent > 0 {
+			style = style.Foreground(resourceColor(node.MemPercent))
+		} else {
+			style = style.Foreground(colorTextDim)
+		}
+	}
+
+	return style
+}
+
+// sortedPoolGroups returns pools in sorted order and nodes within each pool sorted by stage priority.
+func (m Model) sortedPoolGroups() ([]string, map[string][]string) {
+	stageOrder := map[types.NodeStage]int{
+		types.StageDraining:  0,
+		types.StageReimaging: 1,
+		types.StageCordoned:  2,
+		types.StageComplete:  3,
+		types.StageReady:     4,
+	}
+
+	// Collect pools, sorting nodes within each pool
+	poolNodes := make(map[string][]string)
+	for name, node := range m.nodes {
+		pool := node.Pool
+		if pool == "" {
+			pool = "default"
+		}
+		poolNodes[pool] = append(poolNodes[pool], name)
+	}
+
+	// Sort nodes within each pool by stage priority, then name
+	for pool := range poolNodes {
+		nodes := poolNodes[pool]
+		sort.SliceStable(nodes, func(i, j int) bool {
+			ni, nj := m.nodes[nodes[i]], m.nodes[nodes[j]]
+			// Surge nodes last
+			if ni.SurgeNode != nj.SurgeNode {
+				return !ni.SurgeNode
+			}
+			oi, oj := stageOrder[ni.Stage], stageOrder[nj.Stage]
+			if oi != oj {
+				return oi < oj
+			}
+			return nodes[i] < nodes[j]
+		})
+	}
+
+	// Sort pool names
+	pools := make([]string, 0, len(poolNodes))
+	for pool := range poolNodes {
+		pools = append(pools, pool)
+	}
+	sort.Strings(pools)
+
+	return pools, poolNodes
+}
+
+// renderInfoCards renders 2 side-by-side info cards: Recent Activity + Blockers.
+func (m Model) renderInfoCards(panelWidth int) string {
+	cardWidth := (panelWidth - 1) / 2 // 1 char gap between cards
+	if cardWidth < 30 {
+		cardWidth = 30
+	}
+
+	activityCard := m.renderActivityCard(cardWidth)
+	blockersCard := m.renderBlockersCard(cardWidth)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, activityCard, " ", blockersCard)
+}
+
+// cardTitleSeparator renders the underline below card titles.
+func cardTitleSeparator(innerWidth int) string {
+	return lipgloss.NewStyle().Foreground(colorBorderDim).
+		Render(strings.Repeat("─", innerWidth))
+}
+
+// renderActivityCard renders the "Recent Activity" info card.
+func (m Model) renderActivityCard(width int) string {
+	innerWidth := width - 6 // border(2) + padding(4)
+	title := cardTitleStyle.Render("Recent Activity")
+	sep := cardTitleSeparator(innerWidth)
 
 	var lines []string
-
-	// Active blockers: red, with node name and duration
-	if len(activeBlockers) > 0 {
-		title := errorStyle.Render(fmt.Sprintf("%s ACTIVE BLOCKERS (%d)", errorIcon, len(activeBlockers)))
-		lines = append(lines, title)
-
-		for _, blocker := range activeBlockers {
-			lines = append(lines, m.formatOverviewBlockerLine(blocker, true))
-		}
-	}
-
-	// Risk blockers: yellow, informational
-	if len(riskBlockers) > 0 {
-		title := warningStyle.Render(fmt.Sprintf("%s PDB RISKS (%d)", warningIcon, len(riskBlockers)))
-		lines = append(lines, title)
-
-		for _, blocker := range riskBlockers {
-			lines = append(lines, m.formatOverviewBlockerLine(blocker, false))
-		}
-	}
-
-	content := strings.Join(lines, "\n")
-
-	// Use red border for active blockers, yellow for risks only
-	if len(activeBlockers) > 0 {
-		return activeBlockerPanelStyle.Render(content)
-	}
-	return blockerPanelStyle.Render(content)
-}
-
-// formatOverviewBlockerLine formats a single blocker line for the overview section.
-func (m Model) formatOverviewBlockerLine(blocker types.Blocker, isActive bool) string {
-	name := blocker.Name
-	if blocker.Namespace != "" {
-		name = blocker.Namespace + "/" + blocker.Name
-	}
-
-	var lineStyle func(strs ...string) string
-	if isActive {
-		lineStyle = errorStyle.Render
-	} else {
-		lineStyle = warningStyle.Render
-	}
-
-	nameStr := fmt.Sprintf("%s %s", blocker.Type, lineStyle(name))
-
-	nodeStr := ""
-	if blocker.NodeName != "" {
-		nodeStr = fmt.Sprintf(" blocking %s", blocker.NodeName)
-	}
-
-	durationStr := ""
-	if !blocker.StartTime.IsZero() {
-		duration := m.currentTime.Sub(blocker.StartTime)
-		durationStr = fmt.Sprintf(" (%s)", formatDuration(duration))
-	}
-
-	constraint := blocker.Detail
-	if constraint == "" {
-		constraint = "disruption budget exhausted"
-	}
-
-	// Use appropriate color for duration: red for active, yellow for risks
-	return fmt.Sprintf("%s    %s%s%s", nameStr, footerDescStyle.Render(constraint), nodeStr, lineStyle(durationStr))
-}
-
-// renderDrainProgressSection shows drain progress for actively draining nodes
-func (m Model) renderDrainProgressSection() string {
-	drainingNodes := m.nodesByStage[types.StageDraining]
-	if len(drainingNodes) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-
-	for _, nodeName := range drainingNodes {
-		node := m.nodes[nodeName]
-
-		// Title with spinner
-		title := fmt.Sprintf("%s DRAINING: %s", m.spinner.View(), strings.ToUpper(nodeName))
-		b.WriteString(warningStyle.Render(title))
-		b.WriteString("\n")
-
-		// Drain progress uses evictable pods (excludes DaemonSets)
-		evicted := node.InitialPodCount - node.EvictablePodCount
-		if evicted < 0 {
-			evicted = 0
-		}
-		total := node.InitialPodCount
-		if total == 0 {
-			total = node.EvictablePodCount
-		}
-
-		// Progress bar
-		bar := m.smallProg.ViewAs(float64(node.DrainProgress) / 100.0)
-
-		// Elapsed time
-		elapsed := ""
-		if !node.DrainStartTime.IsZero() {
-			dur := m.currentTime.Sub(node.DrainStartTime)
-			mins := int(dur.Minutes())
-			secs := int(dur.Seconds()) % 60
-			if mins > 0 {
-				elapsed = fmt.Sprintf("    Elapsed: %dm %ds", mins, secs)
-			} else {
-				elapsed = fmt.Sprintf("    Elapsed: %ds", secs)
-			}
-		}
-
-		progressLine := fmt.Sprintf("%s  %d/%d pods evicted%s", bar, evicted, total, footerDescStyle.Render(elapsed))
-		b.WriteString(progressLine)
-		b.WriteString("\n")
-
-		// Show waiting pods if any
-		if len(node.WaitingPods) > 0 {
-			waiting := "Waiting on: " + strings.Join(node.WaitingPods, "  ")
-			if len(waiting) > m.mainWidth()-4 {
-				waiting = waiting[:m.mainWidth()-7] + "..."
-			}
-			b.WriteString(footerDescStyle.Render(waiting))
-			b.WriteString("\n")
-		}
-
-		// Show blocker if blocked
-		if node.Blocked && node.BlockerReason != "" {
-			blockerLine := fmt.Sprintf("Blocked: %s", node.BlockerReason)
-			b.WriteString(errorStyle.Render(blockerLine))
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
-}
-
-// calcNodeListVisibleRows calculates visible rows for node list based on screen space
-func (m Model) calcNodeListVisibleRows() int {
-	blockerLines := m.calcBlockerLines()
-	eventsLines := min(len(m.events), 8)
-	reservedLines := 1 + 3 + blockerLines + eventsLines + 4 + 3
-	visibleRows := m.height - reservedLines
-	return clamp(visibleRows, 3, 15)
-}
-
-// calcBlockerLines calculates lines needed for blocker display
-func (m Model) calcBlockerLines() int {
-	if len(m.blockers) == 0 {
-		return 0
-	}
-	activeBlockers, riskBlockers := m.splitBlockersByTier()
-	lines := len(m.blockers) * 2 // Each blocker takes 2 lines
-	if len(activeBlockers) > 0 {
-		lines++ // "ACTIVE BLOCKERS" header
-	}
-	if len(riskBlockers) > 0 {
-		lines++ // "PDB RISKS" header
-	}
-	return lines + 2 // panel border padding
-}
-
-// calcNameWidth returns name column width based on terminal width
-func (m Model) calcNameWidth() int {
-	switch {
-	case m.mainWidth() > 120:
-		return 40
-	case m.mainWidth() > 100:
-		return 35
-	default:
-		return 30
-	}
-}
-
-// renderNodeList shows unified node list with selected row highlight
-func (m Model) renderNodeList() string {
-	var b strings.Builder
-
-	visibleRows := m.calcNodeListVisibleRows()
-	allNodes := m.getSortedNodeList()
-	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(allNodes))
-
-	// Header with hints — exclude surge nodes from count (they're temporary)
-	titleStr := fmt.Sprintf("NODES (%d)", m.totalNodes())
-	hints := footerDescStyle.Render("↑↓ navigate • d describe")
-	spacing := max(m.mainWidth()-len(titleStr)-20-4, 4)
-
-	b.WriteString(panelTitleStyle.Render(titleStr))
-	b.WriteString(strings.Repeat(" ", spacing))
-	b.WriteString(hints)
-	b.WriteString("\n")
-
-	if len(allNodes) == 0 {
-		b.WriteString(footerDescStyle.Render("  No nodes discovered"))
-		return b.String()
-	}
-
-	nameWidth := m.calcNameWidth()
-	rowWidth := max(m.mainWidth()-6, 60)
-	endIdx := min(scrollOffset+visibleRows, len(allNodes))
-
-	for i := scrollOffset; i < endIdx; i++ {
-		b.WriteString(m.renderNodeListRow(allNodes[i], i, nameWidth, rowWidth))
-	}
-
-	return b.String()
-}
-
-// renderNodeListRow renders a single row in the node list
-func (m Model) renderNodeListRow(nodeName string, idx, nameWidth, rowWidth int) string {
-	node := m.nodes[nodeName]
-
-	displayName := nodeName
-	if len(displayName) > nameWidth {
-		displayName = displayName[len(displayName)-nameWidth:]
-	}
-
-	version := node.Version
-	if version == "" {
-		version = "unknown"
-	}
-
-	surgeLabel := ""
-	if node.SurgeNode {
-		surgeLabel = " SURGE"
-	}
-
-	lineContent := fmt.Sprintf("    %-*s    %8s    %-10s%s", nameWidth, displayName, fmt.Sprintf("%d pods", node.PodCount), version, surgeLabel)
-
-	if idx == m.listIndex {
-		return "► " + nodeListSelectedStyle.Width(rowWidth).Render(lineContent) + "\n"
-	}
-	return "  " + lineContent + "\n"
-}
-
-// renderEventsSection shows latest events for overview
-func (m Model) renderEventsSection() string {
-	var b strings.Builder
-
-	title := panelTitleStyle.Render("● EVENTS")
-	b.WriteString(title)
-	b.WriteString("\n")
-
-	eventsToShow := 8
+	eventsToShow := 5
 	if len(m.events) < eventsToShow {
 		eventsToShow = len(m.events)
 	}
 
 	if eventsToShow == 0 {
-		b.WriteString(footerDescStyle.Render("  Waiting for events..."))
-		return b.String()
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorTextMuted).Render("Waiting for events..."))
+	} else {
+		// timestamp(5) + spacing(2) + icon(1) + space(1)
+		maxMsgLen := innerWidth - 9
+		if maxMsgLen < 20 {
+			maxMsgLen = 20
+		}
+		for i := 0; i < eventsToShow; i++ {
+			e := m.events[i]
+			ts := lipgloss.NewStyle().Foreground(colorTextDim).Render(e.Timestamp.Format("15:04"))
+
+			var icon string
+			switch e.Severity {
+			case types.SeverityWarning:
+				icon = lipgloss.NewStyle().Foreground(colorWarning).Render("▲")
+			case types.SeverityError:
+				icon = lipgloss.NewStyle().Foreground(colorError).Render("✖")
+			default:
+				icon = lipgloss.NewStyle().Foreground(colorInfo).Render("●")
+			}
+
+			msg := formatEventConcise(e)
+			if len(msg) > maxMsgLen {
+				msg = msg[:maxMsgLen-3] + "..."
+			}
+
+			lines = append(lines, fmt.Sprintf("%s %s %s", ts, icon, msg))
+		}
 	}
 
-	maxMsgLen := m.mainWidth() - 25
-	if maxMsgLen < 30 {
-		maxMsgLen = 30
+	body := title + "\n" + sep + "\n" + strings.Join(lines, "\n")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorInfo).
+		Padding(1, 2).
+		Width(width - 2).
+		Render(body)
+}
+
+// renderBlockersCard renders the "Blockers" info card.
+func (m Model) renderBlockersCard(width int) string {
+	innerWidth := width - 6 // border(2) + padding(4)
+	title := cardTitleStyle.Render("Blockers")
+	sep := cardTitleSeparator(innerWidth)
+
+	blockers := m.activeBlockers()
+	var lines []string
+
+	if len(blockers) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorTextMuted).Render("No blockers"))
 	}
 
-	for i := 0; i < eventsToShow; i++ {
-		e := m.events[i]
+	for _, b := range blockers {
+		name := b.Name
+		if b.Namespace != "" {
+			name = b.Namespace + "/" + name
+		}
+		lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(colorDraining).Render("PDB: "+name))
 
-		ts := timestampStyle.Render(e.Timestamp.Format("15:04:05"))
-		icon := m.severityIcon(e.Severity)
+		if b.Detail != "" {
+			lines = append(lines, lipgloss.NewStyle().Foreground(colorTextDim).Render("  "+b.Detail))
+		}
+		if b.NodeName != "" {
+			lines = append(lines, lipgloss.NewStyle().Foreground(colorTextDim).Render("  blocking: "+shortenNodeName(b.NodeName)))
+		}
+		if !b.StartTime.IsZero() {
+			dur := m.currentTime.Sub(b.StartTime)
+			lines = append(lines, lipgloss.NewStyle().Foreground(colorWarning).Render("  stalled: "+formatDuration(dur)))
+		}
+		lines = append(lines, "")
+	}
 
-		msg := e.Message
-		if len(msg) > maxMsgLen {
-			msg = msg[:maxMsgLen-3] + "..."
+	// Trim trailing empty line
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	body := title + "\n" + sep + "\n" + strings.Join(lines, "\n")
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorError).
+		Padding(1, 2).
+		Width(width - 2).
+		Render(body)
+}
+
+// renderPreFlightSection renders health checks as indented text when no upgrade is active.
+func (m Model) renderPreFlightSection(_ int) string {
+	indent := "  "
+	titleLine := lipgloss.NewStyle().Bold(true).Foreground(colorTextBold).
+		Render("— PRE-FLIGHT CHECKS")
+
+	var checks []string
+
+	// Check 1: All nodes ready (excluding surge nodes)
+	readyCount := m.stageCountExcludingSurge(types.StageReady)
+	total := m.totalNodes()
+	if total > 0 && readyCount == total {
+		checks = append(checks, indent+successStyle.Render("✓")+fmt.Sprintf(" All nodes Ready (%d/%d)", readyCount, total))
+	} else if total > 0 {
+		notReady := total - readyCount
+		checks = append(checks, indent+errorStyle.Render("✗")+fmt.Sprintf(" %d node(s) not Ready (%d/%d)", notReady, readyCount, total))
+	} else {
+		checks = append(checks, indent+footerDescStyle.Render("… Discovering nodes..."))
+	}
+
+	// Check 2: No cordoned nodes (excluding surge)
+	cordonedCount := m.stageCountExcludingSurge(types.StageCordoned)
+	if cordonedCount == 0 {
+		checks = append(checks, indent+successStyle.Render("✓")+" No cordoned nodes")
+	} else {
+		checks = append(checks, indent+warningStyle.Render("⚠")+fmt.Sprintf(" %d node(s) cordoned", cordonedCount))
+	}
+
+	// Check 3: PDBs that will block drains (structural misconfiguration)
+	if len(m.preFlightBlockers) == 0 {
+		checks = append(checks, indent+successStyle.Render("✓")+" No PDBs will block drain")
+	} else {
+		checks = append(checks, indent+warningStyle.Render("⚠")+fmt.Sprintf(" %d PDB(s) will block drain", len(m.preFlightBlockers)))
+		for _, pdb := range m.preFlightBlockers {
+			name := pdb.Name
+			if pdb.Namespace != "" {
+				name = pdb.Namespace + "/" + name
+			}
+			checks = append(checks, indent+footerDescStyle.Render(fmt.Sprintf("  → %s: %s", name, pdb.Detail)))
+		}
+	}
+
+	// Check 4: Error pods
+	var errorPods int
+	for _, pod := range m.pods {
+		switch pod.Phase {
+		case "CrashLoopBackOff", "Error", "Failed", "ImagePullBackOff", "OOMKilled":
+			errorPods++
+		}
+	}
+	if errorPods == 0 {
+		checks = append(checks, indent+successStyle.Render("✓")+" No pods in error state")
+	} else {
+		checks = append(checks, indent+warningStyle.Render("⚠")+fmt.Sprintf(" %d pod(s) in error state", errorPods))
+	}
+
+	watchMsg := lipgloss.NewStyle().Foreground(colorTextDim).Italic(true).
+		Render(indent + "Watching for upgrade — kupgrade will detect it automatically")
+
+	return titleLine + "\n" + strings.Join(checks, "\n") + "\n" + watchMsg
+}
+
+// renderActiveDrains renders the ACTIVE DRAINS section shown during upgrades.
+// Lists each CORDONED/DRAINING node with drain progress and PDB blocker info.
+func (m Model) renderActiveDrains() string {
+	drainNodes := m.getDrainNodes()
+	if len(drainNodes) == 0 {
+		return ""
+	}
+
+	orangeStyle := lipgloss.NewStyle().Foreground(colorDraining)
+	titleLine := orangeStyle.Bold(true).Render("⚡ ACTIVE DRAINS")
+
+	var lines []string
+	for _, name := range drainNodes {
+		node, ok := m.nodes[name]
+		if !ok {
+			continue
+		}
+		short := shortenNodeName(name)
+
+		var detail string
+		if node.EvictablePodCount > 0 {
+			detail = fmt.Sprintf("draining %d pods", node.EvictablePodCount)
+		} else if node.Stage == types.StageCordoned {
+			detail = "cordoned"
+		} else {
+			detail = string(node.Stage)
 		}
 
-		b.WriteString(fmt.Sprintf("%s  %s %s\n", ts, icon, msg))
+		if node.Blocked && node.BlockerReason != "" {
+			detail += " · " + lipgloss.NewStyle().Foreground(colorWarning).Render("PDB "+node.BlockerReason+" blocking")
+		}
+
+		if !node.DrainStartTime.IsZero() {
+			dur := m.currentTime.Sub(node.DrainStartTime)
+			detail += " (" + formatDuration(dur) + ")"
+		}
+
+		lines = append(lines, orangeStyle.Render("  ▎ ")+lipgloss.NewStyle().Foreground(colorText).Render(short)+" — "+
+			lipgloss.NewStyle().Foreground(colorTextMuted).Render(detail))
 	}
 
-	return b.String()
+	return titleLine + "\n" + strings.Join(lines, "\n")
+}
+
+// formatEventConcise returns a short-form description of an event for the activity card.
+// Maps event types to concise action + target strings instead of raw messages.
+func formatEventConcise(e types.Event) string {
+	shortNode := shortenNodeName(e.NodeName)
+	shortPod := lastSegment(e.PodName)
+
+	switch e.Type {
+	case types.EventNodeCordon:
+		return "Cordoned " + shortNode
+	case types.EventNodeUncordon:
+		return "Uncordoned " + shortNode
+	case types.EventNodeReady:
+		return "Node ready " + shortNode
+	case types.EventNodeNotReady:
+		return "Node not ready " + shortNode
+	case types.EventNodeVersion:
+		return "Version change " + shortNode
+	case types.EventPodEvicted:
+		return "Evicted " + shortPod
+	case types.EventPodScheduled:
+		return "Scheduled " + shortPod
+	case types.EventPodReady:
+		return "Pod ready " + shortPod
+	case types.EventPodFailed:
+		return "Pod failed " + shortPod
+	case types.EventPodDeleted:
+		return "Pod deleted " + shortPod
+	case types.EventK8sWarning:
+		if e.Reason == "FailedEviction" || strings.Contains(e.Message, "PodDisruptionBudget") {
+			name := e.PodName
+			if name == "" {
+				name = e.NodeName
+			}
+			return "PDB " + lastSegment(name) + " blocking"
+		}
+		return "Warning: " + truncateString(e.Message, 40)
+	case types.EventMigration:
+		return "Rescheduled " + shortPod
+	default:
+		return truncateString(e.Message, 45)
+	}
+}
+
+// lastSegment returns the last slash-separated segment of a name.
+// For "namespace/pod-name" returns "pod-name". For simple names, returns as-is.
+func lastSegment(name string) string {
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }

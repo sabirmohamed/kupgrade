@@ -132,6 +132,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			case <-ticker.C:
 				m.CheckPDBBlockers()
 				m.nodeWatcher.CleanupExpiredGhosts()
+				m.nodeWatcher.CheckUpgradeCompletion()
 			}
 		}
 	}()
@@ -258,6 +259,12 @@ func (m *Manager) InitialPodStates() []types.PodState {
 // InitialBlockers returns current blockers (for initial TUI load)
 func (m *Manager) InitialBlockers() []types.Blocker {
 	return m.pdbWatcher.BuildBlockers(m.nodesBlockableByPDB(), m.allPods(), m.isDrainStalled)
+}
+
+// PreFlightBlockers returns PDBs that are structurally misconfigured and will
+// block drains. Used for pre-flight checks — not the same as active blockers.
+func (m *Manager) PreFlightBlockers() []types.Blocker {
+	return m.pdbWatcher.PreFlightBlockers()
 }
 
 // CheckPDBBlockers evaluates all PDBs against current cluster state and emits

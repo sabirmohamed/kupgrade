@@ -46,6 +46,8 @@ func (c *Computer) ComputeStage(node *corev1.Node) types.NodeStage {
 		return types.StageComplete
 	case !ready:
 		return types.StageReimaging
+	case !schedulable && node.Labels["kubernetes.azure.com/upgrade-status"] == "Quarantined":
+		return types.StageQuarantined
 	case !schedulable:
 		// NodeWatcher will correct to DRAINING when pods are actually evicted
 		return types.StageCordoned

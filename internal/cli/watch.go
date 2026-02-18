@@ -62,17 +62,19 @@ func runWatch(configFlags *genericclioptions.ConfigFlags, targetVersion string) 
 	}
 
 	model := tui.New(tui.Config{
-		Context:         client.Context,
-		ServerVersion:   lowestVersion,
-		TargetVersion:   detectedTarget,
-		InitialNodes:    manager.InitialNodeStates(),
-		InitialPods:     manager.InitialPodStates(),
-		InitialBlockers: manager.InitialBlockers(),
-		EventCh:         manager.Events(),
-		NodeStateCh:     manager.NodeStateUpdates(),
-		PodStateCh:      manager.PodStateUpdates(),
-		BlockerCh:       manager.BlockerUpdates(),
-		Clientset:       client.Clientset,
+		Context:             client.Context,
+		ServerVersion:       lowestVersion,
+		TargetVersion:       detectedTarget,
+		ControlPlaneVersion: serverVersion,
+		InitialNodes:        manager.InitialNodeStates(),
+		InitialPods:         manager.InitialPodStates(),
+		InitialBlockers:     manager.InitialBlockers(),
+		PreFlightBlockers:   manager.PreFlightBlockers(),
+		EventCh:             manager.Events(),
+		NodeStateCh:         manager.NodeStateUpdates(),
+		PodStateCh:          manager.PodStateUpdates(),
+		BlockerCh:           manager.BlockerUpdates(),
+		Clientset:           client.Clientset,
 	})
 
 	p := tea.NewProgram(model, tea.WithAltScreen())

@@ -9,188 +9,138 @@ import (
 	"github.com/sabirmohamed/kupgrade/pkg/types"
 )
 
-// renderDrainsScreen renders the drain progress screen
+// renderDrainsScreen renders the drain + blockers screen with sections
 func (m Model) renderDrainsScreen() string {
 	var b strings.Builder
+	w := m.mainWidth()
+
+	// Tab bar
+	counts := m.stageCounts()
+	tabBar := m.renderTabBar(counts)
+
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n\n")
 
 	drainNodes := m.getDrainNodes()
+	blockers := m.activeBlockers()
+
+	// ── ACTIVE DRAINS ──────────────────────────────────────
+	b.WriteString(renderSectionHeader("ACTIVE DRAINS", w))
+	b.WriteString("\n")
 
 	if len(drainNodes) == 0 {
-		b.WriteString(footerDescStyle.Render("  No nodes currently draining or cordoned\n"))
-		b.WriteString(footerDescStyle.Render("  Nodes will appear here when cordoned for upgrade"))
+		b.WriteString(footerDescStyle.Render("  No nodes currently draining or cordoned"))
+		b.WriteString("\n")
 	} else {
-		b.WriteString(m.renderDrainsTable(drainNodes))
+		for _, nodeName := range drainNodes {
+			node := m.nodes[nodeName]
+			b.WriteString(m.renderDrainLine(node))
+			b.WriteString("\n")
+		}
 	}
 
-	// Migrations section (only if migrations exist)
+	// ── BLOCKERS ──────────────────────────────────────────
+	if len(blockers) > 0 {
+		b.WriteString("\n")
+		b.WriteString(renderSectionHeader(fmt.Sprintf("BLOCKERS (%d)", len(blockers)), w))
+		b.WriteString("\n")
+
+		for _, blocker := range blockers {
+			b.WriteString(m.renderBlockerEntry(blocker, true))
+			b.WriteString("\n")
+		}
+	}
+
+	// ── RESCHEDULED ───────────────────────────────────────
 	if len(m.migrations) > 0 {
 		b.WriteString("\n")
 		b.WriteString(m.renderMigrationsSection())
 	}
 
-	b.WriteString("\n")
-	b.WriteString(m.renderFooter())
+	panelBody := b.String()
 
-	return m.placeContent(b.String())
-}
-
-// renderDrainsTable renders the drains table using lipgloss/table with per-cell coloring
-func (m Model) renderDrainsTable(drainNodes []string) string {
-	rows := make([][]string, len(drainNodes))
-	for i, name := range drainNodes {
-		node := m.nodes[name]
-		rows[i] = buildDrainRow(node)
-	}
-
-	visibleRows := m.height - 10
-	if visibleRows < 5 {
-		visibleRows = 5
-	}
-	scrollOffset := calcScrollOffset(m.listIndex, visibleRows, len(drainNodes))
-
-	tableWidth := m.mainWidth() - 2
-	if tableWidth < 80 {
-		tableWidth = 80
-	}
-
-	t := table.New().
-		Headers("NODE", "STAGE", "PROGRESS", "PODS", "STATUS").
-		Rows(rows...).
-		Width(tableWidth).
-		Height(visibleRows).
-		Offset(scrollOffset).
+	// Wrap in outer panel
+	panel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderColumn(false).
-		BorderRow(false).
-		BorderTop(false).
-		BorderBottom(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderHeader(true).
-		BorderStyle(tableBorderStyle).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			return m.drainCellStyle(row, col, drainNodes)
-		})
+		BorderForeground(colorSelected).
+		Padding(0, 1).
+		Width(w - 2).
+		Render(panelBody)
 
-	rendered := t.String()
+	// Status bar + key hints
+	statusBar := m.renderStatusBar(w)
+	keyHints := m.renderKeyHints(w)
 
-	if len(drainNodes) > visibleRows {
-		pos := fmt.Sprintf(" %d/%d  •  d describe", m.listIndex+1, len(drainNodes))
-		rendered += "\n" + footerDescStyle.Render(pos)
-	} else if len(drainNodes) > 0 {
-		rendered += "\n" + footerDescStyle.Render(" d describe")
-	}
-
-	return rendered
+	content := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel, statusBar, keyHints)
+	return m.placeContent(content)
 }
 
-// drainCellStyle returns the lipgloss style for a cell in the drains table.
-// Extracted from renderDrainsTable to reduce cyclomatic complexity.
-func (m Model) drainCellStyle(row, col int, drainNodes []string) lipgloss.Style {
-	style := lipgloss.NewStyle().Padding(0, 1)
+// renderDrainLine renders a single drain node as a section line
+func (m Model) renderDrainLine(node types.NodeState) string {
+	pill := renderStagePillInline(string(node.Stage))
+	name := truncateString(node.Name, 40)
 
-	// Header row styling
-	if row == table.HeaderRow {
-		style = style.Foreground(colorTextMuted).Bold(true)
-		if col == 3 { // PODS
-			style = style.Align(lipgloss.Right)
+	// Progress info
+	progressInfo := ""
+	if node.Stage == types.StageDraining && node.InitialPodCount > 0 {
+		evicted := node.InitialPodCount - node.EvictablePodCount
+		if evicted < 0 {
+			evicted = 0
 		}
-		return style
-	}
-
-	// Row background (alternating)
-	style = m.drainRowBackground(style, row)
-
-	// Right-align PODS column
-	if col == 3 {
-		style = style.Align(lipgloss.Right)
-	}
-
-	// Bounds check before accessing node data
-	if row >= len(drainNodes) {
-		return style
-	}
-
-	// Per-column coloring based on node state
-	node := m.nodes[drainNodes[row]]
-	return m.drainColumnColor(style, col, node)
-}
-
-// drainRowBackground applies alternating background and selected row highlight.
-func (m Model) drainRowBackground(style lipgloss.Style, row int) lipgloss.Style {
-	if row%2 == 0 {
-		style = style.Background(colorBg)
-	} else {
-		style = style.Background(colorBgAlt)
-	}
-
-	// Selected row highlight overrides alternating background
-	if row == m.listIndex {
-		style = style.Background(colorSelected).Foreground(colorTextBold)
-	}
-
-	return style
-}
-
-// drainColumnColor applies per-column foreground colors based on node state.
-func (m Model) drainColumnColor(style lipgloss.Style, col int, node types.NodeState) lipgloss.Style {
-	switch col {
-	case 1: // STAGE
-		if stageColor, ok := stageColors[string(node.Stage)]; ok {
-			style = style.Foreground(stageColor)
-		}
-	case 4: // STATUS
-		style = m.drainStatusColor(style, node)
-	}
-	return style
-}
-
-// drainStatusColor returns the style for the STATUS column based on node state.
-func (m Model) drainStatusColor(style lipgloss.Style, node types.NodeState) lipgloss.Style {
-	if node.Blocked {
-		return style.Foreground(colorError) // red for blocked
-	}
-	if node.Stage == types.StageDraining {
-		return style.Foreground(colorCordoned) // yellow for evicting
-	}
-	return style.Foreground(colorTextMuted)
-}
-
-// buildDrainRow builds a table row for a drain node (plain text, coloring via StyleFunc)
-func buildDrainRow(node types.NodeState) []string {
-	progressBar := plainProgressBar(node.DrainProgress, 10)
-
-	// REIMAGING nodes have completed drain — show 100% progress
-	if node.Stage == types.StageReimaging {
-		progressBar = plainProgressBar(100, 10)
-	}
-
-	var status string
-	if node.Blocked {
-		status = node.BlockerReason
-		if status == "" {
-			status = "blocked"
-		}
-		status = truncateString(status, 30)
-	} else if node.Stage == types.StageDraining {
-		status = "evicting..."
-	} else if node.Stage == types.StageCordoned {
-		status = "waiting"
+		progressInfo = fmt.Sprintf("  %d/%d evicted", evicted, node.InitialPodCount)
 	} else if node.Stage == types.StageReimaging {
-		status = "rebooting..."
-	} else {
-		status = "-"
+		progressInfo = "  rebooting..."
+	} else if node.Stage == types.StageCordoned {
+		progressInfo = "  waiting"
 	}
 
-	return []string{
-		truncateString(node.Name, 40),
-		string(node.Stage),
-		progressBar,
-		fmt.Sprintf("%d", node.PodCount),
-		status,
+	// Inline blocker
+	blockerInfo := ""
+	if node.Blocked && node.BlockerReason != "" {
+		reason := truncateString(node.BlockerReason, 25)
+		blockerInfo = "  " + errorStyle.Render("⚠ "+reason)
+		if !node.DrainStartTime.IsZero() {
+			dur := m.currentTime.Sub(node.DrainStartTime)
+			blockerInfo += footerDescStyle.Render(fmt.Sprintf(" (%s)", formatDuration(dur)))
+		}
 	}
+
+	return fmt.Sprintf("  %s  %s%s%s", pill, name, footerDescStyle.Render(progressInfo), blockerInfo)
+}
+
+// renderBlockerEntry renders a blocker line for the drains screen
+func (m Model) renderBlockerEntry(blocker types.Blocker, isActive bool) string {
+	name := blocker.Name
+	if blocker.Namespace != "" {
+		name = blocker.Namespace + "/" + blocker.Name
+	}
+
+	var style func(strs ...string) string
+	if isActive {
+		style = errorStyle.Render
+	} else {
+		style = warningStyle.Render
+	}
+
+	label := fmt.Sprintf("  %s  %s", blocker.Type, style(name))
+
+	constraint := blocker.Detail
+	if constraint == "" {
+		constraint = "disruption budget exhausted"
+	}
+
+	nodeInfo := ""
+	if blocker.NodeName != "" {
+		nodeInfo = fmt.Sprintf("  blocking %s", blocker.NodeName)
+	}
+
+	durationInfo := ""
+	if !blocker.StartTime.IsZero() {
+		dur := m.currentTime.Sub(blocker.StartTime)
+		durationInfo = "  " + style(formatDuration(dur))
+	}
+
+	return fmt.Sprintf("%s  %s%s%s", label, footerDescStyle.Render(constraint), nodeInfo, durationInfo)
 }
 
 // migrationTableMaxRows limits the migrations table height
@@ -199,9 +149,9 @@ const migrationTableMaxRows = 10
 // renderMigrationsSection shows recent pod migrations during drains
 func (m Model) renderMigrationsSection() string {
 	var b strings.Builder
+	w := m.mainWidth()
 
-	title := panelTitleStyle.Render(fmt.Sprintf("%s RESCHEDULED (%d)", migrateIcon, len(m.migrations)))
-	b.WriteString(title)
+	b.WriteString(renderSectionHeader(fmt.Sprintf("RESCHEDULED (%d)", len(m.migrations)), w))
 	b.WriteString("\n")
 
 	if len(m.migrations) == 0 {
@@ -232,7 +182,7 @@ func (m Model) renderMigrationsSection() string {
 		})
 	}
 
-	tableWidth := m.mainWidth() - 2
+	tableWidth := w - 2
 	if tableWidth < 60 {
 		tableWidth = 60
 	}
@@ -251,31 +201,25 @@ func (m Model) renderMigrationsSection() string {
 		BorderHeader(true).
 		BorderStyle(tableBorderStyle).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			style := lipgloss.NewStyle().Padding(0, 1)
+			s := lipgloss.NewStyle().Padding(0, 1)
 			if row == table.HeaderRow {
-				return style.Foreground(colorTextMuted).Bold(true)
-			}
-			// Alternating row backgrounds
-			if row%2 == 0 {
-				style = style.Background(colorBg)
-			} else {
-				style = style.Background(colorBgAlt)
+				return s.Foreground(colorTextMuted).Bold(true)
 			}
 			switch col {
-			case 0: // TIME
-				style = style.Foreground(colorTextDim)
-			case 1: // STATUS icon
+			case 0:
+				s = s.Foreground(colorTextDim)
+			case 1:
 				if row < len(rows) && rows[row][1] == checkIcon {
-					style = style.Foreground(colorComplete)
+					s = s.Foreground(colorComplete)
 				} else {
-					style = style.Foreground(colorCyan)
+					s = s.Foreground(colorCyan)
 				}
-			case 2: // POD
-				style = style.Foreground(colorText)
-			case 3: // DESTINATION
-				style = style.Foreground(colorTextMuted)
+			case 2:
+				s = s.Foreground(colorText)
+			case 3:
+				s = s.Foreground(colorTextMuted)
 			}
-			return style
+			return s
 		})
 
 	b.WriteString(t.String())
@@ -288,23 +232,24 @@ func (m Model) renderMigrationsSection() string {
 	return b.String()
 }
 
-// shortenNodeName truncates long node names to show the meaningful suffix.
-// e.g., "gke-testbed-gke-default-pool-fa2ce801-l2k0" → "...fa2ce801-l2k0"
+// shortenNodeName truncates long node names while preserving the meaningful parts.
+// For AKS names like "aks-agentpool-55576254-vmss000000", keeps prefix and vmss suffix.
 func shortenNodeName(name string) string {
-	const maxNodeNameLen = 24
+	const maxNodeNameLen = 40
 	if len(name) <= maxNodeNameLen {
 		return name
 	}
-	return "..." + name[len(name)-maxNodeNameLen+3:]
-}
-
-// plainProgressBar renders a text-only progress bar safe for use in table cells
-func plainProgressBar(percent, width int) string {
-	filled := (percent * width) / 100
-	if filled > width {
-		filled = width
+	// Try to keep prefix (pool name) + suffix (vmss ID)
+	// Find last dash-group that starts with "vmss" or similar
+	parts := strings.Split(name, "-")
+	if len(parts) >= 3 {
+		// Keep first 2 parts + last 1 part, shorten middle
+		prefix := parts[0] + "-" + parts[1]
+		suffix := parts[len(parts)-1]
+		shortened := prefix + "-...-" + suffix
+		if len(shortened) <= maxNodeNameLen {
+			return shortened
+		}
 	}
-	empty := width - filled
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
-	return fmt.Sprintf("%s %3d%%", bar, percent)
+	return "..." + name[len(name)-maxNodeNameLen+3:]
 }

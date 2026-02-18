@@ -33,6 +33,34 @@ func extractConditions(node *corev1.Node) []string {
 	return conditions
 }
 
+// extractPoolInfo reads pool name and mode from node labels.
+// Supports AKS, EKS, and GKE label conventions.
+func extractPoolInfo(node *corev1.Node) (pool, poolMode string) {
+	labels := node.Labels
+	if labels == nil {
+		return "", ""
+	}
+
+	// AKS: kubernetes.azure.com/agentpool, kubernetes.azure.com/mode
+	if p, ok := labels["kubernetes.azure.com/agentpool"]; ok {
+		pool = p
+		poolMode = labels["kubernetes.azure.com/mode"]
+		return pool, poolMode
+	}
+
+	// EKS: eks.amazonaws.com/nodegroup
+	if p, ok := labels["eks.amazonaws.com/nodegroup"]; ok {
+		return p, ""
+	}
+
+	// GKE: cloud.google.com/gke-nodepool
+	if p, ok := labels["cloud.google.com/gke-nodepool"]; ok {
+		return p, ""
+	}
+
+	return "", ""
+}
+
 // extractTaints returns taint effects (NoSchedule, NoExecute, etc.).
 func extractTaints(node *corev1.Node) []string {
 	var taints []string

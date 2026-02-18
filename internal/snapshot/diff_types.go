@@ -72,11 +72,31 @@ type DiffSummary struct {
 	NodesChanged int `json:"nodesChanged"`
 }
 
+// PDBDiffCategory classifies a PDB's change between snapshots.
+type PDBDiffCategory string
+
+const (
+	// PDBWillBlock means this PDB will block drains (DesiredHealthy >= ExpectedPods).
+	PDBWillBlock PDBDiffCategory = "WILL_BLOCK"
+	// PDBResolved means this PDB was blocking but now has room for eviction.
+	PDBResolved PDBDiffCategory = "RESOLVED"
+)
+
+// PDBDiff captures the before/after state for a single PDB.
+type PDBDiff struct {
+	Name      string             `json:"name"`
+	Namespace string             `json:"namespace"`
+	Category  PDBDiffCategory    `json:"category"`
+	Before    *types.PDBSnapshot `json:"before,omitempty"`
+	After     *types.PDBSnapshot `json:"after,omitempty"`
+}
+
 // DiffReport is the complete comparison between two snapshots.
 type DiffReport struct {
 	Summary         DiffSummary    `json:"summary"`
 	WorkloadDiffs   []WorkloadDiff `json:"workloadDiffs"`
 	NodeDiffs       []NodeDiff     `json:"nodeDiffs"`
+	PDBDiffs        []PDBDiff      `json:"pdbDiffs,omitempty"`
 	BeforeTimestamp time.Time      `json:"beforeTimestamp"`
 	AfterTimestamp  time.Time      `json:"afterTimestamp"`
 	BeforeVersion   string         `json:"beforeVersion"`

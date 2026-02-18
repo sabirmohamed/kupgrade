@@ -108,10 +108,30 @@ func (w *PDBWatcher) GetPDBDetail(namespace, name string) string {
 	return fmt.Sprintf("%d/%d healthy", pdb.Status.CurrentHealthy, pdb.Status.ExpectedPods)
 }
 
-// isAtRisk returns true if a PDB has zero disruption budget and is actively
-// protecting pods. This is Tier 1 (risk) — the PDB may block a future drain.
+// isAtRisk returns true if a PDB currently has zero disruption budget and is
+// protecting pods. Used as a precondition for active blocker detection —
+// if the PDB has budget available, it can't be blocking a drain.
 func isAtRisk(pdb *policyv1.PodDisruptionBudget) bool {
 	return pdb.Status.DisruptionsAllowed == 0 && pdb.Status.ExpectedPods > 0
+}
+
+// willBlockDrain returns true if a PDB is structurally misconfigured such that
+// it cannot tolerate any pod disruption. This means DesiredHealthy >= ExpectedPods:
+// the PDB requires ALL pods to be healthy, leaving zero room for eviction.
+//
+// Examples that return true:
+//   - minAvailable: 3 with 3 replicas (needs all 3 healthy)
+//   - minAvailable: 1 with 1 replica (single-pod PDB)
+//   - maxUnavailable: 0 (explicitly zero disruptions)
+//
+// Examples that return false:
+//   - minAvailable: 2 with 3 replicas (can tolerate 1 eviction)
+//   - maxUnavailable: 1 with 3 replicas (normal PDB)
+//
+// Used for pre-flight checks — surfaces PDBs that WILL block drains, not
+// transient DisruptionsAllowed==0 states that are normal during drain pacing.
+func willBlockDrain(pdb *policyv1.PodDisruptionBudget) bool {
+	return pdb.Status.DesiredHealthy >= pdb.Status.ExpectedPods && pdb.Status.ExpectedPods > 0
 }
 
 // isBlockingNode returns true if a PDB is actively blocking a specific node's
@@ -164,18 +184,13 @@ func firstMatchingPod(pdb *policyv1.PodDisruptionBudget, nodeName string, pods [
 }
 
 // BuildBlockers evaluates all PDBs against the current cluster state and returns
-// two tiers of blockers:
-//   - Risk (Tier 1): PDB has DisruptionsAllowed == 0, may block future drains
-//   - Active (Tier 2): PDB is blocking a specific draining node right now AND
-//     the drain is stalled (no evictions for DrainStallThreshold)
+// only active blockers — PDBs that are blocking a specific node's drain right now
+// AND the drain is stalled (no evictions for DrainStallThreshold).
 //
-// The isDrainStalled function checks if a node's drain has been stuck. This
-// prevents transient PDB blocks (normal pacing during drain) from appearing
-// as active blockers — only persistent blocks that require user intervention
-// are shown.
+// Transient DisruptionsAllowed==0 states (normal pacing during drain) are NOT
+// reported. Only persistent blocks that require user intervention are shown.
 //
 // Uses only Kubernetes-standard objects. No provider-specific logic.
-// blockerKey builds a stable key for tracking blocker start times.
 func blockerKey(namespace, name, nodeName string) string {
 	return namespace + "/" + name + "/" + nodeName
 }
@@ -197,13 +212,12 @@ func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod, i
 
 		detail := w.GetPDBDetail(pdb.Namespace, pdb.Name)
 
-		// Check if this PDB actively blocks any draining node (Tier 2)
+		// Check if this PDB actively blocks any draining node.
 		// A PDB is only an active blocker if:
 		// 1. It's at risk (DisruptionsAllowed == 0)
 		// 2. Its selector matches pods on the draining node
 		// 3. The drain is stalled (no evictions for 30+ seconds)
 		// This filters out transient PDB pacing during normal drain progression.
-		activeOnNode := false
 		for _, nodeName := range drainingNodes {
 			if isBlockingNode(pdb, nodeName, pods) {
 				key := blockerKey(pdb.Namespace, pdb.Name, nodeName)
@@ -214,11 +228,11 @@ func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod, i
 					startTime = now
 					w.blockerStartTimes[key] = startTime
 				}
+				activeKeys[key] = true
 
-				// Only promote to active blocker if drain is stalled
+				// Only emit as active blocker if drain is stalled
 				if isDrainStalled != nil && isDrainStalled(nodeName) {
 					podName := firstMatchingPod(pdb, nodeName, pods)
-					activeKeys[key] = true
 
 					blockers = append(blockers, types.Blocker{
 						Type:      types.BlockerPDB,
@@ -230,23 +244,8 @@ func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod, i
 						Detail:    detail,
 						StartTime: startTime,
 					})
-					activeOnNode = true
-				} else {
-					// Keep tracking the key so we preserve StartTime
-					activeKeys[key] = true
 				}
 			}
-		}
-
-		// If not actively blocking any draining node, emit as risk (Tier 1)
-		if !activeOnNode {
-			blockers = append(blockers, types.Blocker{
-				Type:      types.BlockerPDB,
-				Tier:      types.BlockerTierRisk,
-				Name:      pdb.Name,
-				Namespace: pdb.Namespace,
-				Detail:    detail,
-			})
 		}
 	}
 
@@ -257,5 +256,28 @@ func (w *PDBWatcher) BuildBlockers(drainingNodes []string, pods []*corev1.Pod, i
 		}
 	}
 
+	return blockers
+}
+
+// PreFlightBlockers returns PDBs that are structurally misconfigured and will
+// block any drain that touches their pods. Unlike BuildBlockers (which detects
+// active stalls during watch), this is for pre-flight/snapshot checks.
+func (w *PDBWatcher) PreFlightBlockers() []types.Blocker {
+	var blockers []types.Blocker
+	for _, obj := range w.informer.GetStore().List() {
+		pdb, ok := obj.(*policyv1.PodDisruptionBudget)
+		if !ok {
+			continue
+		}
+		if willBlockDrain(pdb) {
+			blockers = append(blockers, types.Blocker{
+				Type:      types.BlockerPDB,
+				Tier:      types.BlockerTierRisk,
+				Name:      pdb.Name,
+				Namespace: pdb.Namespace,
+				Detail:    w.GetPDBDetail(pdb.Namespace, pdb.Name),
+			})
+		}
+	}
 	return blockers
 }
