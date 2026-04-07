@@ -37,12 +37,12 @@ func (m Model) renderNodesScreen() string {
 		Width(w - 2).
 		Render(panelBody)
 
-	// Status bar + key hints
+	// Status bar + key hints (pinned to bottom)
 	statusBar := m.renderStatusBar(w)
 	keyHints := m.renderKeyHints(w)
+	footer := lipgloss.JoinVertical(lipgloss.Left, statusBar, keyHints)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel, statusBar, keyHints)
-	return m.placeContent(content)
+	return m.placeContentWithFooter(lipgloss.JoinVertical(lipgloss.Left, tabBar, panel), footer)
 }
 
 // buildNodeRow builds a single row for the nodes table

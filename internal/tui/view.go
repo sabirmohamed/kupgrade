@@ -39,14 +39,24 @@ func (m Model) View() string {
 
 // renderWithOverlay renders an overlay centered on screen
 func (m Model) renderWithOverlay(overlay string) string {
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	placed := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay,
+		lipgloss.WithWhitespaceBackground(colorBg))
+	return fillLinesBg(placed, m.width, colorBg)
 }
 
-// placeContent places content in the available main area dimensions
-func (m Model) placeContent(content string) string {
-	w := m.mainWidth()
-	if w > 0 && m.height > 0 {
-		return lipgloss.Place(w, m.height, lipgloss.Left, lipgloss.Top, content)
+// placeContentWithFooter renders content with footer pinned to the terminal bottom.
+// Main content is placed in the available space above the footer.
+func (m Model) placeContentWithFooter(main, footer string) string {
+	footerHeight := lipgloss.Height(footer)
+	mainAreaHeight := m.height - footerHeight
+	if mainAreaHeight < 1 {
+		mainAreaHeight = 1
 	}
-	return content
+
+	w := m.mainWidth()
+	placed := lipgloss.Place(w, mainAreaHeight, lipgloss.Left, lipgloss.Top, main,
+		lipgloss.WithWhitespaceBackground(colorBg))
+
+	content := placed + "\n" + footer
+	return fillLinesBg(content, m.width, colorBg)
 }

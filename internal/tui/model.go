@@ -294,7 +294,7 @@ func tick() tea.Cmd {
 	})
 }
 
-const metricsRefreshInterval = 30 * time.Second
+const metricsRefreshInterval = 15 * time.Second
 
 // fetchNodeMetrics returns a tea.Cmd that fetches CPU/Memory metrics from the metrics-server.
 // Returns nil when clientset is unavailable (e.g., smoke tests).

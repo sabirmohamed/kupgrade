@@ -100,12 +100,21 @@ func (m Model) renderOverview() string {
 	// Status bar + key hints (outside panel)
 	statusBar := m.renderStatusBar(w)
 	keyHints := m.renderKeyHints(w)
+	footer := lipgloss.JoinVertical(lipgloss.Left, statusBar, keyHints)
 
-	// Compose: tab bar + panel + status bar + key hints
-	content := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel, statusBar, keyHints)
+	// Compose: tab bar + panel + spacer + footer (footer pinned to bottom)
+	mainContent := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel)
+	mainHeight := lipgloss.Height(mainContent)
+	footerHeight := lipgloss.Height(footer)
+	gap := m.height - mainHeight - footerHeight
+	if gap < 0 {
+		gap = 0
+	}
+	spacer := strings.Repeat("\n", gap)
+	content := mainContent + spacer + footer
 
 	if w > 0 && m.height > 0 {
-		return lipgloss.Place(w, m.height, lipgloss.Left, lipgloss.Top, content)
+		return fillLinesBg(content, m.width, colorBg)
 	}
 	return content
 }
@@ -262,6 +271,7 @@ func (m Model) renderPillDialog(counts map[string]int, panelWidth int, upgradeAc
 		dialogBox,
 		lipgloss.WithWhitespaceChars("⎈ "),
 		lipgloss.WithWhitespaceForeground(colorBorderDim),
+		lipgloss.WithWhitespaceBackground(colorBg),
 	)
 }
 

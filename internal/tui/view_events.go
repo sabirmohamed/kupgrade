@@ -47,11 +47,12 @@ func (m Model) renderEventsScreen() string {
 		Width(w - 2).
 		Render(panelBody)
 
+	// Status bar + key hints (pinned to bottom)
 	statusBar := m.renderStatusBar(w)
 	keyHints := m.renderKeyHints(w)
+	footer := lipgloss.JoinVertical(lipgloss.Left, statusBar, keyHints)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, tabBar, panel, statusBar, keyHints)
-	return m.placeContent(content)
+	return m.placeContentWithFooter(lipgloss.JoinVertical(lipgloss.Left, tabBar, panel), footer)
 }
 
 // renderEventsTable renders the aggregated events as a lipgloss/table.

@@ -22,7 +22,11 @@ const (
 // Source: https://github.com/omarchy/themes/tokyo-night
 var (
 	// Backgrounds (layered depth)
-	colorBg        = lipgloss.Color("#1a1b26") // Main background
+	// colorBg is applied to all text styles so kupgrade's background is consistent
+	// across terminals (Ghostty, Terminal.app, iTerm, Warp). This follows the LFK
+	// pattern: force an opaque background on every element so the terminal's own
+	// background never shows through.
+	colorBg        = lipgloss.Color("#000000") // Main background — pure black for maximum contrast
 	colorSelected  = lipgloss.Color("#414868") // Selected item background
 	colorBorderDim = lipgloss.Color("#32344a") // Subtle borders
 
@@ -56,27 +60,33 @@ var (
 	colorInfo    = lipgloss.Color("#7aa2f7") // Blue - info
 )
 
-// Header styles
+// Header styles — all text styles include .Background(colorBg) so kupgrade's
+// background is opaque and consistent across all terminals.
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorInfo)
+			Foreground(colorInfo).
+			Background(colorBg)
 
 	contextStyle = lipgloss.NewStyle().
-			Foreground(colorText)
+			Foreground(colorText).
+			Background(colorBg)
 
 	versionStyle = lipgloss.NewStyle().
-			Foreground(colorWarning)
+			Foreground(colorWarning).
+			Background(colorBg)
 
 	versionCompleteStyle = lipgloss.NewStyle().
-				Foreground(colorComplete)
+				Foreground(colorComplete).
+				Background(colorBg)
 )
 
 // Panel styles
 var (
 	panelTitleStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorText)
+		Foreground(colorText).
+		Background(colorBg)
 )
 
 // Event styles
@@ -88,26 +98,31 @@ var (
 	checkIcon   = "✓"
 
 	warningStyle = lipgloss.NewStyle().
-			Foreground(colorWarning)
+			Foreground(colorWarning).
+			Background(colorBg)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(colorError)
+			Foreground(colorError).
+			Background(colorBg)
 
 	eventCountStyle = lipgloss.NewStyle().
 			Foreground(colorTextBold).Bold(true)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(colorSuccess)
+			Foreground(colorSuccess).
+			Background(colorBg)
 )
 
 // Footer styles
 var (
 	footerKeyStyle = lipgloss.NewStyle().
 			Foreground(colorText).
-			Bold(true)
+			Bold(true).
+			Background(colorBg)
 
 	footerDescStyle = lipgloss.NewStyle().
-			Foreground(colorTextMuted)
+			Foreground(colorTextMuted).
+			Background(colorBg)
 )
 
 // Overlay styles
@@ -115,11 +130,14 @@ var (
 	overlayStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorInfo).
+			BorderBackground(colorBg).
+			Background(colorBg).
 			Padding(1, 2)
 
 	overlayTitleStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorInfo).
+				Background(colorBg).
 				MarginBottom(1)
 )
 
@@ -127,7 +145,8 @@ var (
 var (
 	// lipgloss/table border style
 	tableBorderStyle = lipgloss.NewStyle().
-		Foreground(colorBorderDim)
+		Foreground(colorBorderDim).
+		Background(colorBg)
 )
 
 // stageForegroundColors maps stage names to foreground-only colors for table cells.
@@ -142,9 +161,11 @@ var stageForegroundColors = map[string]lipgloss.Color{
 	"SURGE":       lipgloss.Color("#bb9af7"),
 }
 
-// Stage pill styles — colored background with dark foreground, bold
+// Stage pill styles — high-contrast colored background with bold text.
+// Light backgrounds (yellow, orange, green, cyan) use dark foreground for readability.
+// Dark backgrounds (grey/ready) use white foreground.
 var stagePillStyles = map[string]lipgloss.Style{
-	"READY":       lipgloss.NewStyle().Background(colorReady).Foreground(lipgloss.Color("#c0caf5")).Bold(true).Padding(0, 1),
+	"READY":       lipgloss.NewStyle().Background(colorReady).Foreground(lipgloss.Color("#ffffff")).Bold(true).Padding(0, 1),
 	"CORDONED":    lipgloss.NewStyle().Background(colorCordoned).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
 	"DRAINING":    lipgloss.NewStyle().Background(colorDraining).Foreground(lipgloss.Color(pillDarkFg)).Bold(true).Padding(0, 1),
 	"QUARANTINED": lipgloss.NewStyle().Background(colorError).Foreground(lipgloss.Color("#ffffff")).Bold(true).Padding(0, 1),
@@ -156,8 +177,8 @@ var stagePillStyles = map[string]lipgloss.Style{
 // Tab bar styles
 var (
 	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Background(colorSelected).Foreground(lipgloss.Color("#c0caf5")).Padding(0, 1)
-	tabInactiveStyle = lipgloss.NewStyle().Foreground(colorTextMuted)
-	tabSepStyle      = lipgloss.NewStyle().Foreground(colorTextDim)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(colorTextMuted).Background(colorBg)
+	tabSepStyle      = lipgloss.NewStyle().Foreground(colorTextDim).Background(colorBg)
 )
 
 // Screen tab definitions
@@ -283,7 +304,8 @@ var (
 			Padding(0, 1)
 
 	keyLabelStyle = lipgloss.NewStyle().
-			Foreground(colorTextDim)
+			Foreground(colorTextDim).
+			Background(colorBg)
 )
 
 // Dialog styles
@@ -291,6 +313,8 @@ var (
 	dialogBoxStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPurple).
+		BorderBackground(colorBg).
+		Background(colorBg).
 		Padding(0, 2).
 		Width(dialogWidth)
 )
@@ -299,7 +323,8 @@ var (
 var (
 	cardTitleStyle = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(colorTextBold)
+		Foreground(colorTextBold).
+		Background(colorBg)
 )
 
 // renderSectionHeader renders: ── TITLE ───────────────────

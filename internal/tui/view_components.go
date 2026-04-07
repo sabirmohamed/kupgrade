@@ -329,3 +329,30 @@ func (m *Model) clearPodSearch() {
 	m.podSearchInput.SetValue("")
 	m.podSearchInput.Blur()
 }
+
+// fillLinesBg ensures the background color is continuous across every line.
+// It re-establishes the background after ANSI resets and pads each line to
+// the given width. This prevents the terminal's own background from showing
+// through gaps between styled segments.
+func fillLinesBg(content string, width int, bg lipgloss.Color) string {
+	sample := lipgloss.NewStyle().Background(bg).Render("X")
+	idx := strings.Index(sample, "X")
+	if idx <= 0 {
+		return content
+	}
+	bgSeq := sample[:idx]
+
+	fill := lipgloss.NewStyle().Background(bg)
+	reset := "\x1b[0m"
+
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = bgSeq + strings.ReplaceAll(line, reset, reset+bgSeq)
+		w := lipgloss.Width(line)
+		if w < width {
+			line += fill.Render(strings.Repeat(" ", width-w))
+		}
+		lines[i] = line + reset
+	}
+	return strings.Join(lines, "\n")
+}
