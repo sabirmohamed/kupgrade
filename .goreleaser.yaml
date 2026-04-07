@@ -37,6 +37,21 @@ brews:
     test: |
       system "#{bin}/kupgrade", "--help"
 
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))?\!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))?\!?:.+$'
+      order: 1
+    - title: Documentation
+      regexp: '^.*?docs(\(.+\))?\!?:.+$'
+      order: 2
+    - title: Other
+      order: 999
+
 release:
   draft: false
   prerelease: auto
