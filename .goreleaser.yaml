@@ -41,10 +41,19 @@ release:
   draft: false
   prerelease: auto
   header: |
-    Real-time Kubernetes upgrade observer — nodes, pods, PDBs, and events in one TUI.
+    **Real-time terminal dashboard for Kubernetes node upgrades.**
+
+    Nodes, pods, PDB blockers, drain progress, events, and before/after comparison — one terminal.
+    Works on AKS, EKS, GKE, and any Kubernetes cluster.
 
     ### Install
 
+    **Homebrew:**
+    ```bash
+    brew install sabirmohamed/tap/kupgrade
+    ```
+
+    **curl:**
     ```bash
     curl -fsSL https://raw.githubusercontent.com/sabirmohamed/kupgrade/main/install.sh | bash
     ```
