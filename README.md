@@ -31,6 +31,11 @@ Before launching the TUI with `kupgrade watch`, you can run `kupgrade snapshot` 
 ## Install
 
 ```bash
+# Homebrew
+brew install sabirmohamed/tap/kupgrade
+```
+
+```bash
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/sabirmohamed/kupgrade/main/install.sh | bash
 ```

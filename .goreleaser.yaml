@@ -24,6 +24,19 @@ archives:
 checksum:
   name_template: checksums.txt
 
+brews:
+  - repository:
+      owner: sabirmohamed
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/sabirmohamed/kupgrade"
+    description: "Real-time terminal dashboard for Kubernetes node upgrades"
+    license: "Apache-2.0"
+    install: |
+      bin.install "kupgrade"
+    test: |
+      system "#{bin}/kupgrade", "--help"
+
 release:
   draft: false
   prerelease: auto
