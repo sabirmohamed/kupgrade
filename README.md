@@ -1,187 +1,199 @@
+<div align="center">
+
 # kupgrade
 
-Watch your Kubernetes cluster while it upgrades. One binary, one command, everything you need to see.
-
+**Real-time terminal dashboard for Kubernetes node upgrades**
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/sabirmohamed/kupgrade)](https://goreportcard.com/report/github.com/sabirmohamed/kupgrade)
 [![golangci-lint](https://github.com/sabirmohamed/kupgrade/actions/workflows/go.yml/badge.svg)](https://github.com/sabirmohamed/kupgrade/actions/workflows/go.yml)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Release](https://img.shields.io/github/v/release/sabirmohamed/kupgrade?include_prereleases)](https://github.com/sabirmohamed/kupgrade/releases)
 
-![kupgrade dashboard](docs/images/dashboard.png)
+Everything you need during a Kubernetes upgrade — one terminal.<br>
+Nodes, pods, PDB blockers, drain progress, events, and before/after comparison.
+
+[Why](#why) · [Install](#install) · [What you see](#what-you-see) · [Platform support](#platform-support)
+
+<img src="docs/images/hero-v2.gif" alt="kupgrade watching a live AKS upgrade" width="800">
+
+</div>
 
 ---
 
 ## Why
 
-When nodes start draining, you're switching between `kubectl get nodes -o wide`, `kubectl get pods -A`, and `kubectl get events` across terminals — or flipping through k9s views trying to keep up. When a PDB flashes red, is that actually blocking the upgrade or just normal pacing? Is that node stuck or just waiting its turn?
+Performing a multi-tenant cluster upgrade in production comes with a lot of mental overhead. I wanted one terminal view where I could see every node, what stage it's in, whether drains are moving, and which PDBs are blocking — and switch to pods, events, or kubectl describe without leaving the screen. Having everything in one place gives you peace of mind during an upgrade.
 
-kupgrade gives you one screen with the full picture:
-
-- **Unified view** — nodes, pods, PDBs, and events in one place
-- **Knows when PDBs actually block** — distinguishes real blockers from normal drain pacing
-- **Real-time** — informer-based updates, no polling
-- **Single binary** — no agents or install on your cluster
-- **Works everywhere** — AKS, EKS, GKE, or any Kubernetes cluster
+Before launching the TUI with `kupgrade watch`, you can run `kupgrade snapshot` to capture your cluster state. After the upgrade, run `kupgrade report` to see the diff — workloads, pods, PDBs, node versions. Did something new break, or was it already broken before you started?
 
 ---
 
 ## Install
 
-**Quick install (macOS/Linux):**
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/sabirmohamed/kupgrade/main/install.sh | bash
 ```
 
-**Go install:**
 ```bash
+# Go
 go install github.com/sabirmohamed/kupgrade@latest
 ```
 
-**Build from source:**
+<details>
+<summary>Build from source</summary>
+
 ```bash
 git clone https://github.com/sabirmohamed/kupgrade
 cd kupgrade
 go build -o kupgrade ./cmd/kupgrade
 ```
+</details>
+
+Single binary on your laptop. No agents, no CRDs, no Helm charts, nothing deployed to the cluster. If you can run `kubectl get nodes`, you can run kupgrade — it uses read-only access to nodes, pods, events, and PDBs. Updates are real-time via Kubernetes informers, not polling.
 
 ---
 
 ## Usage
 
-```bash
-kupgrade watch                  # Live upgrade monitoring
-kupgrade watch --context prod   # Specific cluster
-kupgrade snapshot               # Save pre-upgrade baseline
-kupgrade report                 # Post-upgrade diff
-kupgrade report --format json   # For scripting/CI
+```
+snapshot  →  upgrade           → watch  →   report
+capture      kick off upgrade    observe    compare
+baseline     (your CLI/Portal)   live       before/after
 ```
 
-All standard kubectl flags work (`--context`, `--namespace`, `--kubeconfig`).
+```bash
+kupgrade snapshot               # 1. capture baseline before upgrade
+kupgrade watch                  # 2. watch the upgrade in real time
+kupgrade report                 # 3. compare after upgrade
+kupgrade report --format json   # structured output for CI
+```
 
 ---
 
 ## What you see
 
-### Live upgrade monitoring
+### Watching a live upgrade
 
-Point it at your cluster during an upgrade:
-- **Progress bar** with percentage and stage counts
-- **Active drains** with pod eviction progress and elapsed time
-- **PDB status** — risks vs active blockers (more on this below)
-- **Surge nodes** labeled and tracked separately
+**1. Pre-flight — PDB warning detected before upgrade starts**
 
-### Pre/post comparison
+kupgrade watches your cluster and warns about PDBs that will block drains before you even begin.
 
-Take a snapshot before you upgrade, compare after:
+<img src="docs/images/pre-flight.png" alt="Pre-flight dashboard with PDB warning" width="800">
 
-```bash
-$ kupgrade snapshot
-  Snapshot saved: ~/.kupgrade/snapshots/prod-cluster-2026-02-02T14-54-32.json
-  64 workloads, 9 nodes, 23 PDBs across 21 namespaces
+**2. Mid-upgrade — PDB blocker stalls the drain**
 
-$ kupgrade report
-  [NEW_ISSUE]    deployment/api-server: 2 pods not ready
-  [PRE_EXISTING] deployment/legacy-worker: 1 pod CrashLoopBackOff
-  [RESOLVED]     pdb/redis-pdb: was blocking, now has budget
-```
+When a PDB blocks a drain, kupgrade shows exactly which PDB, which node, and how long it's been stalled.
 
-The output works without colors — paste it into Slack or your incident channel.
+<img src="docs/images/pdb-blocker.png" alt="Dashboard with active PDB blocker" width="800">
+
+**3. Progress — nodes completing after unblock**
+
+After fixing the blocker, drains resume and nodes start completing. Progress bar, elapsed time, and estimated remaining.
+
+<img src="docs/images/progress-20.png" alt="Dashboard at 20% progress" width="800">
+
+**4. Almost there — 80% complete**
+
+<img src="docs/images/progress-80.png" alt="Dashboard at 80% progress" width="800">
+
+**5. Done — all nodes upgraded**
+
+<img src="docs/images/complete.png" alt="Dashboard at 100% complete" width="800">
 
 ---
 
-## TUI screens
+### Other screens
 
-Press number keys to switch between screens:
+Press `1`-`4` to switch to detail views.
 
-| Key | Screen | Shows |
-|-----|--------|-------|
-| `0` | Overview | Progress bar, stage counts, PDB risks/blockers, active drains |
-| `1` | Nodes | All nodes with stage, version, pod count, surge labels |
-| `2` | Pods | Pod states, migrations, restarts |
-| `3` | Drains | Active drain progress with elapsed time and stall detection |
-| `4` | Blockers | PDB risks (yellow) vs active blockers (red) |
-| `5` | Events | Upgrade-relevant events with filters |
+**Pods** — problems first, then disrupted, then healthy. Surfaces restarts, probe failures, and pods that moved during the upgrade.
 
+<img src="docs/images/pods-mid.png" alt="Pods view with priority sections" width="800">
 
-### Navigation
+**Drains** — rescheduled pods with source and destination nodes.
 
-| Key | Action |
-|-----|--------|
-| `↑/↓` or `j/k` | Navigate lists |
-| `Enter` | Show details |
-| `?` | Help overlay |
-| `q` | Back / Quit |
-| `/` | Fuzzy search pods |
-| `u/w/a` | Event filter (upgrade/warnings/all) |
+<img src="docs/images/drains-complete.png" alt="Drains view with rescheduled pods" width="800">
+
+---
+
+### Pre/post comparison
+
+Take a snapshot before the upgrade, compare after.
+
+**Before:**
+
+<img src="docs/images/snapshot-output.png" alt="kupgrade snapshot with PDB warning" width="700">
+
+**After:**
+
+<img src="docs/images/report-output.png" alt="kupgrade report showing clean upgrade" width="600">
+
+The report compares workloads, PDBs, and node versions before and after. Exit code is 1 if new issues are found, 0 if clean — paste the output into Slack or pipe `--format json` into your CI pipeline.
 
 ---
 
 ## What it tracks
 
-| Resource | What |
-|----------|------|
-| Nodes | Stage transitions (Ready → Cordoned → Draining → Reimaging → Complete), surge nodes |
-| Pods | Evictions, migrations across nodes, restarts, probe failures |
-| PDBs | Two-tier status: risks vs active blockers |
-| Events | Filtered to upgrade-relevant activity |
+| Resource | What kupgrade shows |
+|----------|---------------------|
+| **Nodes** | Stage transitions (Ready → Cordoned → Draining → Reimaging → Complete), surge nodes, version, CPU/MEM |
+| **Pods** | Priority grouping (problems → disrupted → healthy), migrations, restarts, probe failures |
+| **PDBs** | Flags PDBs that are actually blocking a drain, based on per-node eviction timing |
+| **Events** | Severity-sorted, grouped by reason, with inline kubectl describe |
 
-### PDB intelligence
+---
 
-A PDB with zero disruptions allowed isn't necessarily blocking your upgrade — it might just be pacing the drain normally. kupgrade distinguishes between:
+## Navigation
 
-- **PDB risks** (yellow) — budget exhausted, but drain is still progressing
-- **Active blockers** (red) — drain stalled for 30+ seconds with no pod evictions
-
-No more false alarms from transient PDB states.
+| Key | Action |
+|-----|--------|
+| `0-4` | Switch screens (Dashboard, Nodes, Drains, Pods, Events) |
+| `j/k` or `↑/↓` | Navigate |
+| `d` or `Enter` | kubectl describe |
+| `e` | Expand/collapse event group |
+| `/` | Search pods |
+| `g` / `G` | Top / bottom |
+| `?` | Help |
+| `q` | Back / Quit |
 
 ---
 
 ## Platform support
 
-Works with any Kubernetes cluster that does rolling node upgrades. Built and battle-tested on AKS for now - working in progress for other platforms.
+Each cloud provider handles node upgrades differently. AKS reimages nodes in-place with the same name. EKS terminates and replaces them with new EC2 instances. GKE does rolling replacements one at a time. kupgrade detects your provider from node metadata and adapts — no flags, no config.
 
-| Platform | Stage Pipeline | Notes |
-|----------|---------------|-------|
-| **AKS** | Ready → Cordoned → Draining → Reimaging → Complete | Full lifecycle including surge nodes |
-| **GKE/EKS** | Ready → Cordoned → Draining → Complete | No Reimaging stage (nodes replaced, not reimaged) |
-| **Other** | Ready → Cordoned → Draining → Complete | Standard rolling upgrades |
+| Platform | Upgrade model | What kupgrade tracks |
+|----------|---------------|----------------------|
+| **AKS** | Reimage in-place | Surge nodes, reimage visibility, drain progress |
+| **EKS** | Node replacement | Node replacement tracking, surge promotion |
+| **GKE** | Rolling replacement | Rolling upgrade progress, one-at-a-time tracking |
+| **Other** | Rolling upgrade | Standard cordon → drain → complete lifecycle |
+
+Tested on real upgrades across all three providers, primarily focusing on AKS.
 
 ---
 
 ## What this isn't
 
-- **Not a cluster browser** — use k9s for that
-- **Not an upgrade orchestrator** — your platform handles that (AKS, EKS, GKE, kOps)
-- **Not a deprecation scanner** — use [pluto](https://github.com/FairwindsOps/pluto) or [kubent](https://github.com/doitintl/kube-no-trouble)
-
----
-
-## Requirements
-
-- kubectl access to your cluster
-- Read permissions: nodes, pods, events, poddisruptionbudgets
+- **Not a cluster browser** — [k9s](https://github.com/derailed/k9s) does that
+- **Not an upgrade orchestrator** — your provider handles that (AKS, EKS, GKE, kOps)
+- **Not a deprecation scanner** — [pluto](https://github.com/FairwindsOps/pluto) and [kubent](https://github.com/doitintl/kube-no-trouble) cover that
 
 ---
 
 ## Under the hood
 
-`kupgrade` uses:
-
 - [bubbletea](https://github.com/charmbracelet/bubbletea), [lipgloss](https://github.com/charmbracelet/lipgloss), and [bubbles](https://github.com/charmbracelet/bubbles) for the terminal UI
 - [cobra](https://github.com/spf13/cobra) and [cli-runtime](https://github.com/kubernetes/cli-runtime) for kubectl-compatible CLI flags
-- [client-go](https://github.com/kubernetes/client-go) informers for efficient real-time watching (no polling)
+- [client-go](https://github.com/kubernetes/client-go) informers for real-time watching (no polling)
 - [kubectl](https://github.com/kubernetes/kubectl) describe SDK for the detail overlay
 - [fuzzy](https://github.com/sahilm/fuzzy) for pod search
 
 ---
 
-## Development
-
-Built with assistance of [Claude Opus 4.5](https://claude.ai) using the [BMAD Method](https://github.com/bmadcode/BMAD-METHOD), following [Google's Go Style Guide](https://google.github.io/styleguide/go) and [Effective Go](https://go.dev/doc/effective_go).
-
----
-
-## License
+<div align="center">
 
 Apache 2.0 — See [LICENSE](LICENSE)
+
+</div>
